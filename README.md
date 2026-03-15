@@ -10,7 +10,8 @@
 - **Manages positions** — opens, monitors, and closes LP positions autonomously; decides to STAY, CLOSE, or REDEPLOY based on live PnL, yield, and range data
 - **Claims fees** — tracks unclaimed fees per position and claims when thresholds are met
 - **Learns from performance** — studies top LPers in target pools, saves structured lessons, and evolves screening thresholds based on closed position history
-- **Telegram notifications** — sends cycle summaries and out-of-range alerts to your Telegram chat
+- **Monitors any wallet** — look up open DLMM positions and top LPers for any Solana wallet or pool address
+- **Telegram chat** — full agent chat via Telegram, plus cycle reports and out-of-range alerts sent automatically
 
 ---
 
@@ -61,24 +62,21 @@ npm install
 
 **3. Create `.env`**
 
-```bash
+```env
 OPENROUTER_API_KEY=sk-or-...
-TELEGRAM_BOT_TOKEN=123456:ABC...    # optional
+WALLET_PRIVATE_KEY=your_base58_private_key
+HELIUS_API_KEY=your_helius_key         # for wallet balance lookups
+TELEGRAM_BOT_TOKEN=123456:ABC...       # optional
+LPAGENT_API_KEY=lpagent_...            # optional, for study_top_lpers / get_top_lpers
+DRY_RUN=true                           # set false for live trading
 ```
 
-**4. Configure your wallet and RPC**
+> **RPC**: defaults to `https://pump.helius-rpc.com` (no key needed). Override with `RPC_URL=` in `.env`.
+
+**4. Copy the example config**
 
 ```bash
 cp user-config.example.json user-config.json
-```
-
-Edit `user-config.json` and set at minimum:
-
-```json
-{
-  "walletKey": "YOUR_BASE58_PRIVATE_KEY",
-  "rpcUrl": "https://your-rpc-endpoint"
-}
 ```
 
 **5. Run**
@@ -138,6 +136,7 @@ After startup, an interactive prompt is available. The prompt shows a live count
 | `/candidates` | Re-screen and display the current top pool candidates |
 | `/learn` | Study top LPers across all current candidate pools and save lessons |
 | `/learn <pool_address>` | Study top LPers from a specific pool address |
+| `<wallet_address>` | Ask the agent to check any wallet's positions or a pool's top LPers |
 | `/thresholds` | Show current screening thresholds and closed-position performance stats |
 | `/evolve` | Trigger threshold evolution from performance data (requires 5+ closed positions) |
 | `/stop` | Graceful shutdown |
@@ -158,11 +157,13 @@ Free-form chat persists session history (last 10 exchanges), so you can have a c
 On first message, the agent auto-registers your chat ID and begins sending notifications. No manual chat ID configuration needed.
 
 **Notifications sent:**
-- After every management cycle: position count and SOL balance
-- After every screening cycle: same summary
-- When a position has been out of range for `outOfRangeWaitMinutes` or longer
+- After every management cycle: full agent report (reasoning + decisions)
+- After every screening cycle: full agent report (what it found, whether it deployed)
+- When a position goes out of range past `outOfRangeWaitMinutes`
+- On deploy: pair, amount, position address, tx hash
+- On close: pair and PnL
 
-You can also send commands to the agent via Telegram using the same free-form chat interface as the REPL — the agent will respond with its findings.
+You can also chat with the agent via Telegram using the same free-form interface as the REPL: `"check wallet 7tB8..."`, `"who are the top LPers in pool ABC..."`, `"close all positions"`, etc.
 
 ---
 

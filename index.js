@@ -11,7 +11,7 @@ import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
 import { registerCronRestarter } from "./tools/executor.js";
 import { startPolling, stopPolling, sendMessage, sendHTML, notifyOutOfRange, isEnabled as telegramEnabled, createLiveMessage } from "./telegram.js";
 import { generateBriefing } from "./briefing.js";
-import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, setPositionInstruction, updatePnlAndCheckExits, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop } from "./state.js";
+import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, setPositionInstruction, updatePnlAndCheckExits, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop, getPaperPositions, recordClose } from "./state.js";
 import { getActiveStrategy } from "./strategy-library.js";
 import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
@@ -164,11 +164,95 @@ function stopCronJobs() {
   _cronTasks = [];
 }
 
+// ─── Paper Position Monitor (dry-run learning) ──────────────────
+
+async function checkPaperPositions() {
+  if (process.env.DRY_RUN !== "true") return;
+
+  const papers = getPaperPositions();
+  if (papers.length === 0) return;
+
+  log("cron", `Checking ${papers.length} paper position(s)`);
+
+  for (const paper of papers) {
+    try {
+      const currentBin = await getActiveBin({ pool_address: paper.pool });
+      const currentPrice = currentBin.price;
+      const entryPrice = paper.entry_price;
+
+      if (!entryPrice || !currentPrice) {
+        log("cron", `Paper ${paper.position}: missing price data, skipping`);
+        continue;
+      }
+
+      const priceChangePct = ((currentPrice - entryPrice) / entryPrice) * 100;
+      const ageMinutes = Math.floor((Date.now() - new Date(paper.deployed_at).getTime()) / 60000);
+
+      // Check if paper position should be closed
+      const binRange = paper.bin_range || {};
+      const isOOR = currentBin.binId < (binRange.min ?? -Infinity) ||
+                    currentBin.binId > (binRange.max ?? Infinity);
+      const isExpired = ageMinutes >= config.management.paperHoldMinutes;
+
+      if (!isOOR && !isExpired) {
+        log("cron", `Paper ${paper.pool_name || paper.pool}: age ${ageMinutes}m, price ${priceChangePct.toFixed(1)}% — holding`);
+        continue;
+      }
+
+      // Close the paper position and record performance
+      const closeReason = isOOR
+        ? `[DRY_RUN] Out of range after ${ageMinutes}m (price ${priceChangePct.toFixed(1)}%)`
+        : `[DRY_RUN] Hold period expired after ${ageMinutes}m (price ${priceChangePct.toFixed(1)}%)`;
+
+      log("cron", `Paper ${paper.pool_name || paper.pool}: closing — ${closeReason}`);
+
+      // Use price change as PnL proxy
+      const estimatedPnlPct = priceChangePct;
+      const initialUsd = paper.initial_value_usd || (paper.amount_sol * 150);
+      const estimatedFinalUsd = initialUsd * (1 + estimatedPnlPct / 100);
+
+      const { recordPerformance } = await import("./lessons.js");
+      await recordPerformance({
+        position: paper.position,
+        pool: paper.pool,
+        pool_name: paper.pool_name || paper.pool.slice(0, 8),
+        strategy: paper.strategy,
+        bin_range: paper.bin_range,
+        bin_step: paper.bin_step || null,
+        volatility: paper.volatility || null,
+        fee_tvl_ratio: paper.fee_tvl_ratio || null,
+        organic_score: paper.organic_score || null,
+        amount_sol: paper.amount_sol,
+        fees_earned_usd: 0,
+        final_value_usd: Math.max(0, estimatedFinalUsd),
+        initial_value_usd: initialUsd,
+        minutes_in_range: isOOR ? Math.max(0, ageMinutes - 10) : ageMinutes,
+        minutes_held: ageMinutes,
+        close_reason: closeReason,
+      });
+
+      // Mark closed in state
+      recordClose(paper.position, closeReason);
+
+      if (telegramEnabled()) {
+        const emoji = estimatedPnlPct >= 0 ? "+" : "";
+        sendMessage(
+          `📝 Paper position closed\n\n${paper.pool_name || paper.pool.slice(0, 8)}\nPrice: ${emoji}${estimatedPnlPct.toFixed(1)}% | Age: ${ageMinutes}m\nReason: ${isOOR ? "Out of range" : "Hold expired"}\n\n(DRY RUN — learning recorded)`
+        ).catch(() => {});
+      }
+    } catch (e) {
+      log("cron_error", `Paper position check failed for ${paper.position}: ${e.message}`);
+    }
+  }
+}
+
 export async function runManagementCycle({ silent = false } = {}) {
   if (_managementBusy) return null;
   _managementBusy = true;
   timers.managementLastRun = Date.now();
   log("cron", "Starting management cycle");
+  // Check paper positions (dry-run learning)
+  await checkPaperPositions().catch((e) => log("cron_error", `Paper position check failed: ${e.message}`));
   let mgmtReport = null;
   let positions = [];
   let liveMessage = null;

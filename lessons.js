@@ -175,6 +175,11 @@ export async function recordPerformance(perf) {
 function derivLesson(perf) {
   const tags = [];
 
+  // Tag dry-run lessons for filtering
+  if (perf.close_reason?.includes("[DRY_RUN]")) {
+    tags.push("dry_run");
+  }
+
   // Categorize outcome
   const outcome = perf.pnl_pct >= 5 ? "good"
     : perf.pnl_pct >= 0 ? "neutral"

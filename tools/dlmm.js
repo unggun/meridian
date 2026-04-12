@@ -121,8 +121,50 @@ export async function deployPosition({
 
   if (process.env.DRY_RUN === "true") {
     const totalBins = activeBinsBelow + activeBinsAbove;
+
+    // Fetch entry price for paper position tracking (read-only, no SDK needed)
+    let entryPrice = null;
+    let entryBinId = null;
+    try {
+      const binData = await getActiveBin({ pool_address });
+      entryPrice = binData.price;
+      entryBinId = binData.binId;
+    } catch (e) {
+      log("deploy", `DRY RUN — could not fetch entry price: ${e.message}`);
+    }
+
+    // Generate a deterministic paper position ID
+    const paperId = `paper_${pool_address.slice(0, 8)}_${Date.now()}`;
+
+    trackPosition({
+      position: paperId,
+      pool: pool_address,
+      pool_name,
+      strategy: activeStrategy,
+      bin_range: {
+        min: entryBinId != null ? entryBinId - activeBinsBelow : null,
+        max: entryBinId != null ? entryBinId + activeBinsAbove : null,
+        bins_below: activeBinsBelow,
+        bins_above: activeBinsAbove,
+      },
+      bin_step,
+      volatility,
+      fee_tvl_ratio,
+      organic_score,
+      amount_sol: amount_y ?? amount_sol ?? 0,
+      amount_x: amount_x ?? 0,
+      active_bin: entryBinId,
+      initial_value_usd: initial_value_usd ?? 0,
+      dry_run: true,
+      entry_price: entryPrice,
+    });
+
     return {
       dry_run: true,
+      success: true,
+      position: paperId,
+      pool: pool_address,
+      pool_name,
       would_deploy: {
         pool_address,
         strategy: activeStrategy,
@@ -132,7 +174,7 @@ export async function deployPosition({
         amount_y: amount_y || amount_sol || 0,
         wide_range: totalBins > 69,
       },
-      message: "DRY RUN — no transaction sent",
+      message: "DRY RUN — paper position tracked for learning",
     };
   }
 

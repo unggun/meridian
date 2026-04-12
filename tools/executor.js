@@ -382,6 +382,19 @@ async function runSafetyChecks(name, args) {
           reason: `Max positions (${config.risk.maxPositions}) reached. Close a position first.`,
         };
       }
+
+      // In dry-run mode, also count paper positions toward the limit
+      if (process.env.DRY_RUN === "true") {
+        const { getPaperPositions } = await import("../state.js");
+        const paperCount = getPaperPositions().length;
+        if (paperCount >= config.risk.maxPositions) {
+          return {
+            pass: false,
+            reason: `Paper position limit reached: ${paperCount} paper positions open (max ${config.risk.maxPositions}). Wait for them to expire.`,
+          };
+        }
+      }
+
       const alreadyInPool = positions.positions.some(
         (p) => p.pool === args.pool_address
       );

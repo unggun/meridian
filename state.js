@@ -68,6 +68,8 @@ export function trackPosition({
   organic_score,
   initial_value_usd,
   signal_snapshot = null,
+  dry_run = false,
+  entry_price = null,
 }) {
   const state = load();
   state.positions[position] = {
@@ -86,6 +88,8 @@ export function trackPosition({
     organic_score,
     initial_value_usd,
     signal_snapshot: signal_snapshot || null,
+    dry_run,
+    entry_price,
     deployed_at: new Date().toISOString(),
     out_of_range_since: null,
     last_claim_at: null,
@@ -105,9 +109,9 @@ export function trackPosition({
     confirmed_trailing_exit_until: null,
     trailing_active: false,
   };
-  pushEvent(state, { action: "deploy", position, pool_name: pool_name || pool });
+  pushEvent(state, { action: "deploy", position, pool_name: pool_name || pool, dry_run });
   save(state);
-  log("state", `Tracked new position: ${position} in pool ${pool}`);
+  log("state", `Tracked ${dry_run ? "paper" : "new"} position: ${position} in pool ${pool}`);
 }
 
 /**
@@ -333,6 +337,14 @@ export function getTrackedPositions(openOnly = false) {
 }
 
 /**
+ * Get open paper (dry-run) positions.
+ */
+export function getPaperPositions() {
+  const state = load();
+  return Object.values(state.positions).filter((p) => p.dry_run && !p.closed);
+}
+
+/**
  * Get a single tracked position.
  */
 export function getTrackedPosition(position_address) {
@@ -503,7 +515,7 @@ export function syncOpenPositions(active_addresses) {
 
   for (const posId in state.positions) {
     const pos = state.positions[posId];
-    if (pos.closed || activeSet.has(posId)) continue;
+    if (pos.closed || pos.dry_run || activeSet.has(posId)) continue;
 
     // Grace period: newly deployed positions may not be indexed yet
     const deployedAt = pos.deployed_at ? new Date(pos.deployed_at).getTime() : 0;

@@ -88,15 +88,15 @@ import { config } from "./config.js";
 import { getStateSummary } from "./state.js";
 import { getLessonsForPrompt, getPerformanceSummary } from "./lessons.js";
 
-// Supports OpenRouter (default) or any OpenAI-compatible local server (e.g. LM Studio)
+// Supports MiniMax (default), OpenRouter, or any OpenAI-compatible local server (e.g. LM Studio)
 // To use LM Studio: set LLM_BASE_URL=http://localhost:1234/v1 and LLM_API_KEY=lm-studio in .env
 const client = new OpenAI({
-  baseURL: process.env.LLM_BASE_URL || "https://openrouter.ai/api/v1",
+  baseURL: process.env.LLM_BASE_URL || "https://api.minimax.io/v1",
   apiKey: process.env.LLM_API_KEY || process.env.OPENROUTER_API_KEY,
   timeout: 5 * 60 * 1000,
 });
 
-const DEFAULT_MODEL = process.env.LLM_MODEL || "openrouter/healer-alpha";
+const DEFAULT_MODEL = process.env.LLM_MODEL || "MiniMax-M2.7";
 
 const TOOL_REQUIRED_INTENTS = /\b(deploy|open position|open|add liquidity|lp into|invest in|close|exit|withdraw|remove liquidity|claim|harvest|collect|swap|convert|sell|exchange|block|unblock|blacklist|self.?update|pull latest|git pull|update yourself|config|setting|threshold|set |change|update |balance|wallet|position|portfolio|pnl|yield|range|screen|candidate|find pool|search|research|token|smart wallet|whale|watch.?list|tracked wallet|study top|top lpers?|lp behavior|who.?s lping|performance|history|stats|report|lesson|learned|teach|pin|unpin)\b/i;
 
@@ -131,7 +131,7 @@ function isSystemRoleError(error) {
 
 function isToolChoiceRequiredError(error) {
   const message = String(error?.message || error?.error?.message || error || "");
-  return /tool_choice/i.test(message) && /required/i.test(message);
+  return /tool_choice/i.test(message);
 }
 
 /**
@@ -171,7 +171,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
       const activeModel = model || DEFAULT_MODEL;
 
       // Retry up to 3 times on transient provider errors (502, 503, 529)
-      const FALLBACK_MODEL = "stepfun/step-3.5-flash:free";
+      const FALLBACK_MODEL = "MiniMax-M2.7-highspeed";
       let response;
       let usedModel = activeModel;
       // Force a tool call on step 0 for action intents — prevents the model from inventing deploy/close outcomes

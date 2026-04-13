@@ -123,11 +123,11 @@ Before `deploy_position` executes:
 Linear formula based on pool volatility (set in screener prompt, `index.js`):
 
 ```
-bins_below = round(35 + (volatility / 5) * 34), clamped to [35, 69]
+bins_below = round(50 + (volatility / 5) * 40), clamped to [50, 90]
 ```
 
-- Low volatility (0) → 35 bins
-- High volatility (5+) → 69 bins
+- Low volatility (0) → 50 bins
+- High volatility (5+) → 90 bins
 - Any value in between is valid (continuous, not tiered)
 
 ---

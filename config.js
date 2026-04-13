@@ -94,9 +94,9 @@ export const config = {
     temperature: u.temperature ?? 0.373,
     maxTokens:   u.maxTokens   ?? 4096,
     maxSteps:    u.maxSteps    ?? 20,
-    managementModel: u.managementModel ?? process.env.LLM_MODEL ?? "xiaomi/mimo-v2-pro",
-    screeningModel:  u.screeningModel  ?? process.env.LLM_MODEL ?? "xiaomi/mimo-v2-pro",
-    generalModel:    u.generalModel    ?? process.env.LLM_MODEL ?? "xiaomi/mimo-v2-pro",
+    managementModel: u.managementModel ?? process.env.LLM_MODEL ?? "MiniMax-M2.7",
+    screeningModel:  u.screeningModel  ?? process.env.LLM_MODEL ?? "MiniMax-M2.7",
+    generalModel:    u.generalModel    ?? process.env.LLM_MODEL ?? "MiniMax-M2.7",
   },
 
   // ─── Common Token Mints ────────────────

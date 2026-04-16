@@ -61,6 +61,11 @@ export const config = {
     badPnlCooldownHours:        u.badPnlCooldownHours        ?? 24,
     winnerCooldownHours:        u.winnerCooldownHours        ?? 6,
     winnerCooldownMinPnlPct:    u.winnerCooldownMinPnlPct    ?? 0,   // cool pool if last close pnl_pct > this
+    nightModeStartUtc:          u.nightModeStartUtc          ?? null,  // e.g. 17 enables night mode 17:00 UTC
+    nightModeEndUtc:            u.nightModeEndUtc            ?? null,  // e.g. 23 disables at 23:00 UTC (exclusive)
+    nightStopLossPct:           u.nightStopLossPct           ?? null,  // overrides stopLossPct during night window
+    nightMaxVolatility:         u.nightMaxVolatility         ?? null,  // blocks deploys with volatility >= this at night
+    maxVolatility:              u.maxVolatility              ?? null,  // day/always cap; null = no cap
     minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
     stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
     takeProfitFeePct:      u.takeProfitFeePct      ?? 5,
@@ -163,4 +168,31 @@ export function reloadScreeningThresholds() {
     if (fresh.maxBundlePct      != null) s.maxBundlePct     = fresh.maxBundlePct;
     if (fresh.maxBotHoldersPct  != null) s.maxBotHoldersPct = fresh.maxBotHoldersPct;
   } catch { /* ignore */ }
+}
+
+/**
+ * Returns management config with night-mode overrides applied when the current
+ * UTC hour falls within [nightModeStartUtc, nightModeEndUtc) (end exclusive).
+ * Handles wrap-around windows (e.g. start=22, end=2).
+ *
+ * @param {Date} [now] — optional clock override for tests. Defaults to new Date().
+ * @returns {object} shallow copy of config.management plus { isNight: boolean }.
+ */
+export function getEffectiveManagementConfig(now = new Date()) {
+  const m = config.management;
+  const start = m.nightModeStartUtc;
+  const end   = m.nightModeEndUtc;
+
+  let isNight = false;
+  if (start != null && end != null) {
+    const h = now.getUTCHours();
+    isNight = start <= end ? (h >= start && h < end) : (h >= start || h < end);
+  }
+
+  const eff = { ...m, isNight };
+  if (isNight) {
+    if (m.nightStopLossPct   != null) eff.stopLossPct   = m.nightStopLossPct;
+    if (m.nightMaxVolatility != null) eff.maxVolatility = m.nightMaxVolatility;
+  }
+  return eff;
 }

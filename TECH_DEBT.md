@@ -41,3 +41,16 @@ const sig = await sendAndConfirmTransaction(connection, tx, [wallet]);
 ```
 Discover the pool address for an untracked position via the portfolio API:
 `https://dlmm.datapi.meteora.ag/portfolio/open?user=<wallet>`
+
+---
+
+## Partial night-mode coverage in position exits
+
+**File:** `state.js:435-457` (stop loss + trailing TP blocks)
+**Surfaces as:** stop loss honours `nightStopLossPct`, but trailing-TP's `trailingDropPct` keeps reading from `mgmtConfig` directly — so night mode doesn't tighten the trailing exit even though high-vol hours are exactly when it should.
+
+### Why it's like this
+Plan `2026-04-16-night-mode-and-winner-cooldown.md` only scoped the stop-loss check. Wiring trailing-TP and the OOR-timeout path through `getEffectiveManagementConfig()` was left for a follow-up so this commit stayed minimal and reviewable.
+
+### Proper fix
+Drop the `mgmtConfig` parameter from `updatePnlAndCheckExits` entirely and resolve `effMgmt = getEffectiveManagementConfig()` once at the top of the function. Then every exit check (stop loss, trailing TP, OOR, rule-3 pumped) reads from the same night-aware source. Add a night-specific `nightTrailingDropPct` if we want tighter trailing at night.

@@ -433,6 +433,9 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   if (changed) save(state);
 
   // ── Stop loss (night-mode aware) ──────────────────────────────
+  // NOTE: only the stop-loss check resolves effective (night-aware) config.
+  // Trailing-TP and OOR checks below still read directly from mgmtConfig —
+  // see TECH_DEBT.md "Partial night-mode coverage in position exits".
   const effMgmt = getEffectiveManagementConfig();
   if (!pnl_pct_suspicious && currentPnlPct != null && effMgmt.stopLossPct != null && currentPnlPct <= effMgmt.stopLossPct) {
     return {

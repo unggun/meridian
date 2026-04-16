@@ -10,6 +10,7 @@
 
 import fs from "fs";
 import { log } from "./logger.js";
+import { getEffectiveManagementConfig } from "./config.js";
 
 const STATE_FILE = "./state.json";
 
@@ -431,11 +432,12 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
 
   if (changed) save(state);
 
-  // ── Stop loss ──────────────────────────────────────────────────
-  if (!pnl_pct_suspicious && currentPnlPct != null && mgmtConfig.stopLossPct != null && currentPnlPct <= mgmtConfig.stopLossPct) {
+  // ── Stop loss (night-mode aware) ──────────────────────────────
+  const effMgmt = getEffectiveManagementConfig();
+  if (!pnl_pct_suspicious && currentPnlPct != null && effMgmt.stopLossPct != null && currentPnlPct <= effMgmt.stopLossPct) {
     return {
       action: "STOP_LOSS",
-      reason: `Stop loss: PnL ${currentPnlPct.toFixed(2)}% <= ${mgmtConfig.stopLossPct}%`,
+      reason: `Stop loss: PnL ${currentPnlPct.toFixed(2)}% <= ${effMgmt.stopLossPct}%${effMgmt.isNight ? " (night mode)" : ""}`,
     };
   }
 

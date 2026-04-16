@@ -20,7 +20,7 @@ import { addToBlacklist, removeFromBlacklist, listBlacklist } from "../token-bla
 import { blockDev, unblockDev, listBlockedDevs } from "../dev-blocklist.js";
 import { addSmartWallet, removeSmartWallet, listSmartWallets, checkSmartWalletsOnPool } from "../smart-wallets.js";
 import { getTokenInfo, getTokenHolders, getTokenNarrative } from "./token.js";
-import { config, reloadScreeningThresholds } from "../config.js";
+import { config, reloadScreeningThresholds, getEffectiveManagementConfig } from "../config.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -159,6 +159,13 @@ const toolMap = {
       minVolumeToRebalance: ["management", "minVolumeToRebalance"],
       stopLossPct: ["management", "stopLossPct"],
       takeProfitFeePct: ["management", "takeProfitFeePct"],
+      nightModeStartUtc:     ["management", "nightModeStartUtc"],
+      nightModeEndUtc:       ["management", "nightModeEndUtc"],
+      nightStopLossPct:      ["management", "nightStopLossPct"],
+      nightMaxVolatility:    ["management", "nightMaxVolatility"],
+      maxVolatility:         ["management", "maxVolatility"],
+      winnerCooldownHours:   ["management", "winnerCooldownHours"],
+      winnerCooldownMinPnlPct: ["management", "winnerCooldownMinPnlPct"],
       trailingTakeProfit: ["management", "trailingTakeProfit"],
       trailingTriggerPct: ["management", "trailingTriggerPct"],
       trailingDropPct: ["management", "trailingDropPct"],
@@ -374,6 +381,15 @@ export async function executeTool(name, args) {
 async function runSafetyChecks(name, args) {
   switch (name) {
     case "deploy_position": {
+      // Reject pools with volatility above the effective cap (night-mode aware)
+      const effMgmtForDeploy = getEffectiveManagementConfig();
+      if (effMgmtForDeploy.maxVolatility != null && args.volatility != null && args.volatility >= effMgmtForDeploy.maxVolatility) {
+        return {
+          pass: false,
+          reason: `Pool volatility ${args.volatility} is at or above the max allowed (${effMgmtForDeploy.maxVolatility})${effMgmtForDeploy.isNight ? " during night mode" : ""}. Skip this pool.`,
+        };
+      }
+
       // Reject pools with bin_step out of configured range
       const minStep = config.screening.minBinStep;
       const maxStep = config.screening.maxBinStep;

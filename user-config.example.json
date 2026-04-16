@@ -43,6 +43,8 @@
   "outOfRangeWaitMinutes": 30,
   "oorCooldownTriggerCount": 3,
   "oorCooldownHours": 12,
+  "winnerCooldownHours": 6,
+  "winnerCooldownMinPnlPct": 0,
   "minVolumeToRebalance": 1000,
   "stopLossPct": -50,
   "emergencyPriceDropPct": -50,

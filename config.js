@@ -56,6 +56,11 @@ export const config = {
     outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? 30,
     oorCooldownTriggerCount: u.oorCooldownTriggerCount ?? 3,
     oorCooldownHours:       u.oorCooldownHours       ?? 12,
+    badPnlCooldownTriggerCount: u.badPnlCooldownTriggerCount ?? 3,
+    badPnlCooldownMinAvgPct:    u.badPnlCooldownMinAvgPct    ?? 1,   // if last N deploys avg < this %, cool down
+    badPnlCooldownHours:        u.badPnlCooldownHours        ?? 24,
+    winnerCooldownHours:        u.winnerCooldownHours        ?? 6,
+    winnerCooldownMinPnlPct:    u.winnerCooldownMinPnlPct    ?? 0,   // cool pool if last close pnl_pct > this
     minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
     stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
     takeProfitFeePct:      u.takeProfitFeePct      ?? 5,

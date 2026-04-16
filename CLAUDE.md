@@ -88,6 +88,9 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 | positionSizePct | management | 0.35 |
 | minSolToOpen | management | 0.55 |
 | outOfRangeWaitMinutes | management | 30 |
+| badPnlCooldownTriggerCount | management | 3 |
+| badPnlCooldownMinAvgPct | management | 1 |
+| badPnlCooldownHours | management | 24 |
 | managementIntervalMin | schedule | 10 |
 | screeningIntervalMin | schedule | 30 |
 | managementModel / screeningModel / generalModel | llm | openrouter/healer-alpha |
@@ -102,6 +105,7 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 2. **Monitor**: management cron → `getMyPositions()` → `getPositionPnl()` → OOR detection → pool-memory snapshots
 3. **Close**: `close_position` → `recordPerformance()` in lessons.js → auto-swap base token to SOL → Telegram notify
 4. **Learn**: `evolveThresholds()` runs on performance data → updates config.screening → persists to user-config.json
+5. **Pool cooldowns** (pool-memory.js): a pool gets cooled down if (a) its last `oorCooldownTriggerCount` deploys all closed OOR, OR (b) its last `badPnlCooldownTriggerCount` deploys averaged below `badPnlCooldownMinAvgPct`. Cooled-down pools are skipped by the screener until expiry. Base mints share cooldowns across pools for the OOR case.
 
 ---
 
@@ -189,9 +193,8 @@ const actualBaseFee = baseFactor > 0
 
 `lessons.js` records closed position performance and auto-derives lessons. Key points:
 - `getLessonsForPrompt({ agentType })` — injects relevant lessons into system prompt
-- `evolveThresholds()` — adjusts screening thresholds based on winners vs losers
+- `evolveThresholds()` — adjusts `minFeeActiveTvlRatio`, `maxBinStep`, `minOrganic` based on winner/loser separation. Logic assumes losers = low-fee pools and raises floors. Real-world data has shown losers often = HIGH-fee yield-trap pools, so the function rarely fires. A `maxFeeActiveTvlRatio` ceiling would be a more useful knob — not yet implemented.
 - Performance recorded via `recordPerformance()` called from executor.js after `close_position`
-- **Known issue**: `evolveThresholds()` references `maxVolatility` and `minFeeTvlRatio` but config.js uses `minFeeActiveTvlRatio` and has no `maxVolatility` key — the evolution of these keys is a no-op
 
 ---
 

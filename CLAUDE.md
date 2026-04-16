@@ -91,11 +91,22 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 | badPnlCooldownTriggerCount | management | 3 |
 | badPnlCooldownMinAvgPct | management | 1 |
 | badPnlCooldownHours | management | 24 |
+| winnerCooldownHours | management | 6 |
+| winnerCooldownMinPnlPct | management | 0 |
+| nightModeStartUtc | management | null |
+| nightModeEndUtc | management | null |
+| nightStopLossPct | management | null |
+| nightMaxVolatility | management | null |
+| maxVolatility | management | null |
 | managementIntervalMin | schedule | 10 |
 | screeningIntervalMin | schedule | 30 |
 | managementModel / screeningModel / generalModel | llm | openrouter/healer-alpha |
 
 **`computeDeployAmount(walletSol)`** — scales position size with wallet balance (compounding). Formula: `clamp(deployable × positionSizePct, floor=deployAmountSol, ceil=maxDeployAmount)`.
+
+**Night mode** (`getEffectiveManagementConfig`): when `nightModeStartUtc` and `nightModeEndUtc` are both set, the stop loss (`stopLossPct`) tightens to `nightStopLossPct` and deploys are rejected for pools with `volatility >= nightMaxVolatility` between those UTC hours (start-inclusive, end-exclusive; wrap-around supported). Used at the stop-loss check site in `state.js` and the `deploy_position` safety check in `tools/executor.js`.
+
+**Winner cooldown** (`pool-memory.js:recordPoolDeploy`): after a winning close (`pnl_pct > winnerCooldownMinPnlPct`), the pool is put on cooldown for `winnerCooldownHours`. Prevents re-deploying into a pool whose move has already paid out. Skipped if an existing cooldown expires later than the winner-cooldown candidate (longest-expiry wins).
 
 ---
 
@@ -105,7 +116,7 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 2. **Monitor**: management cron → `getMyPositions()` → `getPositionPnl()` → OOR detection → pool-memory snapshots
 3. **Close**: `close_position` → `recordPerformance()` in lessons.js → auto-swap base token to SOL → Telegram notify
 4. **Learn**: `evolveThresholds()` runs on performance data → updates config.screening → persists to user-config.json
-5. **Pool cooldowns** (pool-memory.js): a pool gets cooled down if (a) its last `oorCooldownTriggerCount` deploys all closed OOR, OR (b) its last `badPnlCooldownTriggerCount` deploys averaged below `badPnlCooldownMinAvgPct`. Cooled-down pools are skipped by the screener until expiry. Base mints share cooldowns across pools for the OOR case.
+5. **Pool cooldowns** (pool-memory.js): a pool gets cooled down if (a) its last `oorCooldownTriggerCount` deploys all closed OOR, (b) its last `badPnlCooldownTriggerCount` deploys averaged below `badPnlCooldownMinAvgPct`, or (c) its last close was a winner (`pnl_pct > winnerCooldownMinPnlPct`) — in which case the pool cools for `winnerCooldownHours`. Cooled-down pools are skipped by the screener. Base mints share cooldowns across pools for the OOR case only.
 
 ---
 

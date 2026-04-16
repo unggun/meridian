@@ -172,6 +172,36 @@ export function recordPoolDeploy(poolAddress, deployData) {
     }
   }
 
+  // Bad-PnL cooldown — break the loop where we keep redeploying into a pool that isn't
+  // making us money. Looks at last N deploys; if avg PnL is below threshold, cool down.
+  const badPnlTriggerCount = config.management.badPnlCooldownTriggerCount ?? 3;
+  const badPnlMinAvgPct    = config.management.badPnlCooldownMinAvgPct    ?? 1;
+  const badPnlHours        = config.management.badPnlCooldownHours        ?? 24;
+  const recentWithPnl = entry.deploys.slice(-badPnlTriggerCount).filter((d) => d.pnl_pct != null);
+  if (recentWithPnl.length >= badPnlTriggerCount) {
+    const avgRecent = recentWithPnl.reduce((s, d) => s + d.pnl_pct, 0) / recentWithPnl.length;
+    if (avgRecent < badPnlMinAvgPct) {
+      const reason = `low avg pnl (${avgRecent.toFixed(2)}% over last ${badPnlTriggerCount} deploys)`;
+      const cooldownUntil = setPoolCooldown(entry, badPnlHours, reason);
+      log("pool-memory", `Cooldown set for ${entry.name} until ${cooldownUntil} (${reason})`);
+    }
+  }
+
+  // Winner cooldown — don't redeploy into a pool whose last close was a win.
+  // Data showed 100% of double-digit losses were re-deploys into recent-winner pools.
+  const winnerCooldownHours   = config.management.winnerCooldownHours   ?? 6;
+  const winnerCooldownMinPnl  = config.management.winnerCooldownMinPnlPct ?? 0;
+  if (winnerCooldownHours > 0 && deploy.pnl_pct != null && deploy.pnl_pct > winnerCooldownMinPnl) {
+    // Only override if no stronger cooldown is already active (longer expiry wins).
+    const existing = entry.cooldown_until ? new Date(entry.cooldown_until).getTime() : 0;
+    const candidate = Date.now() + winnerCooldownHours * 60 * 60 * 1000;
+    if (candidate > existing) {
+      const reason = `winner cooldown (last close +${deploy.pnl_pct}%)`;
+      const cooldownUntil = setPoolCooldown(entry, winnerCooldownHours, reason);
+      log("pool-memory", `Cooldown set for ${entry.name} until ${cooldownUntil} (${reason})`);
+    }
+  }
+
   save(db);
   log("pool-memory", `Recorded deploy for ${entry.name} (${poolAddress.slice(0, 8)}): PnL ${deploy.pnl_pct}%`);
 }

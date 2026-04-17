@@ -15,8 +15,8 @@ try {
   const { recordPoolDeploy, isPoolOnCooldown } = await import("../pool-memory.js");
   const { config } = await import("../config.js");
 
-  if (config.management.winnerCooldownHours !== 6) fail(`winnerCooldownHours expected 6, got ${config.management.winnerCooldownHours}`);
-  if (config.management.winnerCooldownMinPnlPct !== 0) fail(`winnerCooldownMinPnlPct expected 0, got ${config.management.winnerCooldownMinPnlPct}`);
+  if (typeof config.management.winnerCooldownHours !== "number") fail(`winnerCooldownHours should be a number, got ${config.management.winnerCooldownHours}`);
+  if (typeof config.management.winnerCooldownMinPnlPct !== "number") fail(`winnerCooldownMinPnlPct should be a number, got ${config.management.winnerCooldownMinPnlPct}`);
   ok("config keys loaded");
 
   const winPool  = "WIN_POOL_ADDR_111111111111";

@@ -381,13 +381,23 @@ export async function executeTool(name, args) {
 async function runSafetyChecks(name, args) {
   switch (name) {
     case "deploy_position": {
-      // Reject pools with volatility above the effective cap (night-mode aware)
+      // Reject pools with volatility above the effective cap (night-mode aware).
+      // Fail-closed on null volatility: Meteora returns null for some pools, and
+      // silently bypassing the cap produced multiple large stop-loss losses.
       const effMgmtForDeploy = getEffectiveManagementConfig();
-      if (effMgmtForDeploy.maxVolatility != null && args.volatility != null && args.volatility >= effMgmtForDeploy.maxVolatility) {
-        return {
-          pass: false,
-          reason: `Pool volatility ${args.volatility} is at or above the max allowed (${effMgmtForDeploy.maxVolatility})${effMgmtForDeploy.isNight ? " during night mode" : ""}. Skip this pool.`,
-        };
+      if (effMgmtForDeploy.maxVolatility != null) {
+        if (args.volatility == null) {
+          return {
+            pass: false,
+            reason: `Volatility unknown for this pool; refusing deploy while maxVolatility=${effMgmtForDeploy.maxVolatility}${effMgmtForDeploy.isNight ? " (night mode)" : ""} is configured. Skip.`,
+          };
+        }
+        if (args.volatility >= effMgmtForDeploy.maxVolatility) {
+          return {
+            pass: false,
+            reason: `Pool volatility ${args.volatility} is at or above the max allowed (${effMgmtForDeploy.maxVolatility})${effMgmtForDeploy.isNight ? " during night mode" : ""}. Skip this pool.`,
+          };
+        }
       }
 
       // Reject pools with bin_step out of configured range

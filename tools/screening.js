@@ -410,6 +410,23 @@ export async function getTopCandidates({ limit = 10 } = {}) {
       return true;
     }));
 
+    // Max fee/TVL filter — block liquidity traps (high fees hiding IL bleed)
+    const maxFeeTvl = config.screening.maxFeeActiveTvlRatio;
+    if (maxFeeTvl != null) {
+      const before = eligible.length;
+      eligible.splice(0, eligible.length, ...eligible.filter((p) => {
+        const ratio = Number(p.fee_active_tvl_ratio);
+        if (!Number.isFinite(ratio)) return true;
+        if (ratio > maxFeeTvl) {
+          log("screening", `maxFeeActiveTvlRatio filter: dropped ${p.name} — ${ratio} > ${maxFeeTvl}`);
+          pushFilteredReason(filteredOut, p, `fee/aTVL ${ratio} exceeds cap ${maxFeeTvl}`);
+          return false;
+        }
+        return true;
+      }));
+      if (eligible.length < before) log("screening", `maxFeeActiveTvlRatio removed ${before - eligible.length} pool(s)`);
+    }
+
     // ATH filter — drop pools where price is too close to ATH
     const athFilter = config.screening.athFilterPct;
     if (athFilter != null) {

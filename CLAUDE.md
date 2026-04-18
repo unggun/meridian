@@ -99,7 +99,7 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 ## Position Lifecycle
 
 1. **Deploy**: `deploy_position` → executor safety checks → `trackPosition()` in state.js → Telegram notify
-2. **Monitor**: management cron → `getMyPositions()` → `getPositionPnl()` → OOR detection → pool-memory snapshots
+2. **Monitor**: management cron → `getMyPositions()` → `getPositionPnl()` → OOR detection → pool-memory snapshots → chart_exit check (underwater positions only, via `confirmIndicatorPreset({side: "exit"})`)
 3. **Close**: `close_position` → `recordPerformance()` in lessons.js → auto-swap base token to SOL → Telegram notify
 4. **Learn**: `evolveThresholds()` runs on performance data → updates config.screening → persists to user-config.json
 

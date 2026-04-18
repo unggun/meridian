@@ -424,3 +424,36 @@ export function addPoolNote({ pool_address, note }) {
   log("pool-memory", `Note added to ${pool_address.slice(0, 8)}: ${safeNote}`);
   return { saved: true, pool_address, note: safeNote };
 }
+
+/**
+ * Apply a cooldown to a specific pool by address. Persists to disk.
+ * Returns true if the pool was found and the cooldown was set, false otherwise.
+ */
+export function cooldownPoolByAddress(poolAddress, hours, reason) {
+  if (!poolAddress) return false;
+  const db = load();
+  const entry = db[poolAddress];
+  if (!entry) return false;
+  setPoolCooldown(entry, hours, reason);
+  save(db);
+  return true;
+}
+
+/**
+ * Apply a cooldown to every pool entry whose name matches `nameSubstring`
+ * (case-insensitive). Returns number of pools cooled down.
+ */
+export function cooldownPoolsByName(nameSubstring, hours, reason) {
+  const needle = String(nameSubstring || "").toLowerCase();
+  if (!needle) return 0;
+  const db = load();
+  let count = 0;
+  for (const entry of Object.values(db)) {
+    if (String(entry?.name || "").toLowerCase().includes(needle)) {
+      setPoolCooldown(entry, hours, reason);
+      count++;
+    }
+  }
+  if (count > 0) save(db);
+  return count;
+}

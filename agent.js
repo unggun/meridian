@@ -160,7 +160,12 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
   const NO_RETRY_TOOLS = new Set(["deploy_position"]);
   const firedOnce = new Set();
   const mustUseRealTool = shouldRequireRealToolUse(goal, agentType, requireTool);
+  // For screener cycles, track whether the critical deploy tool was actually called
+  // (not just any tool) to catch models that hallucinate deploy output as text
+  const CRITICAL_TOOLS_BY_ROLE = { SCREENER: "deploy_position", MANAGER: "close_position" };
+  const criticalTool = CRITICAL_TOOLS_BY_ROLE[agentType] || null;
   let sawToolCall = false;
+  let sawCriticalTool = false;
   let noToolRetryCount = 0;
 
   let emptyStreak = 0;
@@ -254,21 +259,29 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
           log("agent", "Empty response, retrying...");
           continue;
         }
-        if (mustUseRealTool && !sawToolCall) {
+        // Reject if no tool was called at all, or if the model hallucinated the critical
+        // action (e.g. wrote "DEPLOYED" without calling deploy_position)
+        const missingAnything = mustUseRealTool && !sawToolCall;
+        const hallucinatedCritical = criticalTool && !sawCriticalTool
+          && ACTION_INTENTS.test(goal) && ACTION_INTENTS.test(msg.content || "");
+        if (missingAnything || hallucinatedCritical) {
           noToolRetryCount += 1;
           messages.pop();
-          log("agent", `Rejected no-tool final answer (${noToolRetryCount}/2) for tool-required request`);
+          const reason = missingAnything ? "no tool call" : `no ${criticalTool} call (hallucinated output)`;
+          log("agent", `Rejected final answer (${noToolRetryCount}/2): ${reason}`);
+          log("agent", `Rejected content: ${String(msg.content ?? "").slice(0, 1000)}`);
           if (noToolRetryCount >= 2) {
             return {
-              content: "I couldn't complete that reliably because no tool call was made. Please retry after checking the logs.",
+              content: `I couldn't complete that reliably — ${reason}. Please retry after checking the logs.`,
               userMessage: goal,
             };
           }
+          const nudge = missingAnything
+            ? "You have not used any tool yet. This request requires real tool execution or live tool-backed data. Do not answer from memory or inference. Call the appropriate tool first, then report only the real result."
+            : `You wrote a deploy/close report but never called ${criticalTool}. The action did NOT happen on-chain. You MUST call ${criticalTool} to actually execute it. Do not fabricate results.`;
           messages.push({
             role: providerMode === "system" ? "system" : "user",
-            content: providerMode === "system"
-              ? "You have not used any tool yet. This request requires real tool execution or live tool-backed data. Do not answer from memory or inference. Call the appropriate tool first, then report only the real result."
-              : "[SYSTEM REMINDER]\nYou have not used any tool yet. This request requires real tool execution or live tool-backed data. Do not answer from memory or inference. Call the appropriate tool first, then report only the real result.",
+            content: providerMode === "system" ? nudge : `[SYSTEM REMINDER]\n${nudge}`,
           });
           continue;
         }
@@ -281,6 +294,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
       // Execute each tool call in parallel
       const toolResults = await Promise.all(msg.tool_calls.map(async (toolCall) => {
         const functionName = toolCall.function.name.replace(/<.*$/, "").trim();
+        if (criticalTool && functionName === criticalTool) sawCriticalTool = true;
         let functionArgs;
 
         try {

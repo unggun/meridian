@@ -277,6 +277,11 @@ export async function runManagementCycle({ silent = false } = {}) {
         actionMap.set(p.position, { action: "CLOSE", rule: "exit", reason: exitMap.get(p.position) });
         continue;
       }
+      // Chart indicator exit — fires only when position is underwater
+      if (indicatorExitMap.has(p.position)) {
+        actionMap.set(p.position, { action: "CLOSE", rule: "chart_exit", reason: indicatorExitMap.get(p.position) });
+        continue;
+      }
       // Instruction-set — pass to LLM, can't parse in JS
       if (p.instruction) {
         actionMap.set(p.position, { action: "INSTRUCTION" });

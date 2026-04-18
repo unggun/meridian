@@ -254,7 +254,10 @@ export async function runManagementCycle({ silent = false } = {}) {
         );
         underwater.forEach((p, i) => {
           const r = results[i];
-          if (r.status !== "fulfilled") return;
+          if (r.status !== "fulfilled") {
+            log("state_warn", `Chart exit check rejected for ${p.pair}: ${r.reason?.message || r.reason}`);
+            return;
+          }
           const v = r.value;
           if (v?.enabled && v.confirmed && !v.skipped) {
             const firedInterval = Array.isArray(v.intervals)

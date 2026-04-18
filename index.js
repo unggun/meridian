@@ -242,6 +242,32 @@ export async function runManagementCycle({ silent = false } = {}) {
       }
     }
 
+    // ── Chart indicator exit check (only for underwater positions) ──
+    const indicatorExitMap = new Map();
+    if (config.indicators?.enabled) {
+      const underwater = positionData.filter(
+        (p) => p.base_mint && Number.isFinite(p.pnl_pct) && p.pnl_pct < 0 && !exitMap.has(p.position),
+      );
+      if (underwater.length > 0) {
+        const results = await Promise.allSettled(
+          underwater.map((p) => confirmIndicatorPreset({ mint: p.base_mint, side: "exit" })),
+        );
+        underwater.forEach((p, i) => {
+          const r = results[i];
+          if (r.status !== "fulfilled") return;
+          const v = r.value;
+          if (v?.enabled && v.confirmed && !v.skipped) {
+            const firedInterval = Array.isArray(v.intervals)
+              ? v.intervals.find((x) => x && x.confirmed)
+              : null;
+            const reason = firedInterval?.reason || v.reason || "Bearish chart signal";
+            indicatorExitMap.set(p.position, reason);
+            log("state", `Chart exit alert for ${p.pair}: ${reason}`);
+          }
+        });
+      }
+    }
+
     // ── Deterministic rule checks (no LLM) ──────────────────────────
     // action: CLOSE | CLAIM | STAY | INSTRUCTION (needs LLM)
     const actionMap = new Map();

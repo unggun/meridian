@@ -493,16 +493,23 @@ export async function runScreeningCycle({ silent = false } = {}) {
         .join("\n");
       const funnelBlock = buildGmgnFunnelReport(gmgnStageCounts, gmgnAllFiltered, { fromStage: 2 });
       const thresholds = `Thresholds: tvl>$${config.screening.minTvl} | vol>$${config.screening.minVolume} | organic>${config.screening.minOrganic}% | holders>${config.screening.minHolders} | fee/tvl>${config.screening.minFeeActiveTvlRatio}%`;
-      screenReport = funnelBlock
-        ? `No candidates available.\n\n${funnelBlock}`
-        : combinedExamples
-          ? `No candidates available.\nFiltered examples:\n${combinedExamples}`
-          : `No candidates available (all filtered).\n${thresholds}`;
+      // Distinguish "discovery API returned nothing" from "candidates were rejected post-fetch" for Meteora source
+      const s = config.screening;
+      const presetSummary = `mcap $${(s.minMcap/1e6).toFixed(1)}M–$${(s.maxMcap/1e6).toFixed(1)}M · tvl $${(s.minTvl/1e3).toFixed(0)}k${s.maxTvl ? `–$${(s.maxTvl/1e3).toFixed(0)}k` : "+"} · holders ≥${s.minHolders} · organic ≥${s.minOrganic} · bin ${s.minBinStep}–${s.maxBinStep} · fee/aTVL ≥${s.minFeeActiveTvlRatio} · ${s.timeframe}/${s.category}`;
+      if (funnelBlock) {
+        screenReport = `No candidates available.\n\n${funnelBlock}`;
+      } else if (combinedExamples) {
+        screenReport = `No candidates available.\nFiltered examples:\n${combinedExamples}`;
+      } else if (candidates.length === 0) {
+        screenReport = `No candidates available — discovery API returned 0 pools matching screener filters.\nActive preset: ${presetSummary}\nTry /setcfg to relax minMcap, minOrganic, minHolders, or switch timeframe/category.`;
+      } else {
+        screenReport = `No candidates available (all filtered).\n${thresholds}`;
+      }
       appendDecision({
         type: "no_deploy",
         actor: "SCREENER",
         summary: "No candidates available",
-        reason: funnelBlock || combinedExamples || "All candidates filtered before deploy",
+        reason: funnelBlock || combinedExamples || (candidates.length === 0 ? `Discovery API returned 0 pools · ${presetSummary}` : "All candidates filtered before deploy"),
         rejected: combined.slice(0, 5).map((entry) => `${entry.name}: ${entry.reason}`),
       });
       return screenReport;

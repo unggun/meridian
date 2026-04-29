@@ -134,13 +134,27 @@ bins_below = round(35 + (volatility / 5) * 34), clamped to [35, 69]
 
 ## Telegram Commands
 
-Handled directly in `index.js` (bypass LLM):
+Handled directly in `index.js` (bypass LLM). Help text is in `formatHelpText()` around line 948.
 
 | Command | Action |
 |---------|--------|
+| `/help` | Show all commands |
+| `/status` | Wallet + positions snapshot |
+| `/wallet` | Wallet balance, deploy amount, HiveMind status |
 | `/positions` | List open positions with progress bar |
-| `/close <n>` | Close position by list index |
-| `/set <n> <note>` | Set note on position by list index |
+| `/pool <n>` | Detailed info for one open position |
+| `/close <n>` | Close one position by index |
+| `/closeall` | Close all open positions |
+| `/set <n> <note>` | Set note/instruction on position |
+| `/config` | Show important runtime config |
+| `/setcfg <key> <value>` | Update persisted config |
+| `/screen` | Refresh deterministic candidate list |
+| `/candidates` | Show latest cached candidates |
+| `/deploy <n>` | Deploy candidate by cached index |
+| `/briefing` | Morning briefing (24h activity, PnL, lessons, portfolio) |
+| `/hive` / `/hive pull` | HiveMind sync status / manual pull now |
+| `/pause` / `/resume` | Stop/start cron cycles |
+| `/stop` | Shut down agent |
 
 Progress bar format: `[████████░░░░░░░░░░░░] 40%` (no bin numbers, no arrows)
 

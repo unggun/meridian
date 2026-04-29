@@ -260,6 +260,7 @@ export const config = {
     candles: indicatorUserConfig.candles ?? 298,
     rsiOversold: indicatorUserConfig.rsiOversold ?? 30,
     rsiOverbought: indicatorUserConfig.rsiOverbought ?? 80,
+    maxEntryRsi: indicatorUserConfig.maxEntryRsi ?? null,
     requireAllIntervals: indicatorUserConfig.requireAllIntervals ?? false,
   },
 };

@@ -20,6 +20,7 @@ import { addToBlacklist, removeFromBlacklist, listBlacklist } from "../token-bla
 import { blockDev, unblockDev, listBlockedDevs } from "../dev-blocklist.js";
 import { addSmartWallet, removeSmartWallet, listSmartWallets, checkSmartWalletsOnPool } from "../smart-wallets.js";
 import { getTokenInfo, getTokenHolders, getTokenNarrative } from "./token.js";
+import { confirmIndicatorPreset } from "./chart-indicators.js";
 import { config, reloadScreeningThresholds } from "../config.js";
 import { getRecentDecisions } from "../decision-log.js";
 import fs from "fs";
@@ -596,6 +597,42 @@ async function runSafetyChecks(name, args) {
             pass: false,
             reason: `Insufficient SOL: have ${balance.sol} SOL, need ${minRequired} SOL (${amountY} deploy + ${gasReserve} gas reserve).`,
           };
+        }
+      }
+
+      // Supertrend entry freshness — screen-time check can be minutes stale.
+      // Reject if entry preset no longer confirms at deploy moment.
+      if (config.indicators?.enabled && args.base_mint) {
+        try {
+          const confirmation = await confirmIndicatorPreset({
+            mint: args.base_mint,
+            side: "entry",
+          });
+          if (confirmation && confirmation.enabled && !confirmation.confirmed && !confirmation.skipped) {
+            return {
+              pass: false,
+              reason: `Entry indicator rejected at deploy: ${confirmation.reason || "Supertrend not confirming entry"}. Trend likely flipped since screening — skip this deploy.`,
+            };
+          }
+
+          // Independent RSI ceiling — block deploys into overbought conditions
+          // even when the preset confirms (entry-side veto, reuses same payload).
+          const maxEntryRsi = Number(config.indicators.maxEntryRsi);
+          if (Number.isFinite(maxEntryRsi) && confirmation?.intervals?.length) {
+            const overbought = confirmation.intervals
+              .filter((i) => i.ok && i.signal?.rsi != null && Number(i.signal.rsi) >= maxEntryRsi)
+              .sort((a, b) => Number(b.signal.rsi) - Number(a.signal.rsi))[0];
+            if (overbought) {
+              const rsi = Number(overbought.signal.rsi).toFixed(2);
+              return {
+                pass: false,
+                reason: `Entry RSI ceiling: RSI ${rsi} on ${overbought.interval} >= max ${maxEntryRsi}. Token overbought — skip this deploy.`,
+              };
+            }
+          }
+        } catch (err) {
+          // Fail open — indicator API errors shouldn't block deploys
+          log("safety", `indicator check error for ${args.base_mint?.slice(0,8)}: ${err.message}`);
         }
       }
 

@@ -185,6 +185,27 @@ export function recordPoolDeploy(poolAddress, deployData) {
     }
   }
 
+  // Loss-cluster cooldown — if M of last N deploys closed below threshold, pause this pool + token
+  const lossTriggerCount = config.management.lossClusterCooldownTriggerCount ?? 2;
+  const lossWindow = config.management.lossClusterCooldownWindow ?? 4;
+  const lossCooldownHours = config.management.lossClusterCooldownHours ?? 24;
+  const lossThresholdPct = config.management.lossClusterPnlThresholdPct ?? -3;
+  const windowDeploys = entry.deploys.slice(-lossWindow).filter((d) => d.pnl_pct != null);
+  const lossesInWindow = windowDeploys.filter((d) => d.pnl_pct <= lossThresholdPct).length;
+
+  if (
+    lossesInWindow >= lossTriggerCount &&
+    !(entry.cooldown_until && new Date(entry.cooldown_until) > new Date())
+  ) {
+    const reason = `loss cluster (${lossesInWindow}/${windowDeploys.length} ≤ ${lossThresholdPct}% in last ${lossWindow})`;
+    const poolCooldownUntil = setPoolCooldown(entry, lossCooldownHours, reason);
+    const mintCooldownUntil = setBaseMintCooldown(db, entry.base_mint, lossCooldownHours, reason);
+    log("pool-memory", `Cooldown set for ${entry.name} until ${poolCooldownUntil} (${reason})`);
+    if (entry.base_mint && mintCooldownUntil) {
+      log("pool-memory", `Base mint cooldown set for ${entry.base_mint.slice(0, 8)} until ${mintCooldownUntil} (${reason})`);
+    }
+  }
+
   if (config.management.repeatDeployCooldownEnabled) {
     const triggerCount = Math.max(1, Number(config.management.repeatDeployCooldownTriggerCount ?? 3));
     const cooldownHours = Math.max(0, Number(config.management.repeatDeployCooldownHours ?? 12));

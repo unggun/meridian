@@ -152,6 +152,7 @@ const toolMap = {
       // screening
       screeningSource: ["screening", "source"],
       minFeeActiveTvlRatio: ["screening", "minFeeActiveTvlRatio"],
+      maxFeeActiveTvlRatio: ["screening", "maxFeeActiveTvlRatio"],
       excludeHighSupplyConcentration: ["screening", "excludeHighSupplyConcentration"],
       minTvl: ["screening", "minTvl"],
       maxTvl: ["screening", "maxTvl"],
@@ -191,6 +192,10 @@ const toolMap = {
       repeatDeployCooldownHours: ["management", "repeatDeployCooldownHours"],
       repeatDeployCooldownScope: ["management", "repeatDeployCooldownScope"],
       repeatDeployCooldownMinFeeEarnedPct: ["management", "repeatDeployCooldownMinFeeEarnedPct"],
+      lossClusterCooldownTriggerCount: ["management", "lossClusterCooldownTriggerCount"],
+      lossClusterCooldownWindow: ["management", "lossClusterCooldownWindow"],
+      lossClusterCooldownHours: ["management", "lossClusterCooldownHours"],
+      lossClusterPnlThresholdPct: ["management", "lossClusterPnlThresholdPct"],
       minVolumeToRebalance: ["management", "minVolumeToRebalance"],
       stopLossPct: ["management", "stopLossPct"],
       takeProfitPct: ["management", "takeProfitPct"],
@@ -289,6 +294,7 @@ const toolMap = {
       indicatorCandles: ["indicators", "candles", ["chartIndicators", "candles"]],
       rsiOversold: ["indicators", "rsiOversold", ["chartIndicators", "rsiOversold"]],
       rsiOverbought: ["indicators", "rsiOverbought", ["chartIndicators", "rsiOverbought"]],
+      maxEntryRsi: ["indicators", "maxEntryRsi", ["chartIndicators", "maxEntryRsi"]],
       requireAllIntervals: ["indicators", "requireAllIntervals", ["chartIndicators", "requireAllIntervals"]],
     };
 

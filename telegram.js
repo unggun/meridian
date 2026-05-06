@@ -139,6 +139,17 @@ export async function sendHTML(html) {
   return postTelegram("sendMessage", { text: html.slice(0, 4096), parse_mode: "HTML" });
 }
 
+// Escape user/dynamic values before interpolating into sendHTML templates.
+// Telegram's HTML parse_mode rejects the whole message if it sees an unescaped
+// `<`, `>`, or `&` outside of a recognized tag (e.g. "fee/TVL 2.57% < min 11%").
+export function escapeHtml(value) {
+  if (value == null) return "";
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 export async function editMessage(text, messageId) {
   if (!TOKEN || !chatId || !messageId) return null;
   return postTelegram("editMessageText", {
@@ -409,39 +420,40 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
     ? `Bin step: ${binStep ?? "?"}  |  Base fee: ${baseFee != null ? baseFee + "%" : "?"}\n`
     : "";
   await sendHTML(
-    `✅ <b>Deployed</b> ${pair}\n` +
-    `Amount: ${amountSol} SOL\n` +
+    `✅ <b>Deployed</b> ${escapeHtml(pair)}\n` +
+    `Amount: ${escapeHtml(amountSol)} SOL\n` +
     priceStr +
     coverageStr +
     poolStr +
-    `Position: <code>${position?.slice(0, 8)}...</code>\n` +
-    `Tx: <code>${tx?.slice(0, 16)}...</code>`
+    `Position: <code>${escapeHtml(position?.slice(0, 8))}...</code>\n` +
+    `Tx: <code>${escapeHtml(tx?.slice(0, 16))}...</code>`
   );
 }
 
-export async function notifyClose({ pair, pnlUsd, pnlPct }) {
+export async function notifyClose({ pair, pnlUsd, pnlPct, reason }) {
   if (hasActiveLiveMessage()) return;
   const sign = pnlUsd >= 0 ? "+" : "";
   await sendHTML(
-    `🔒 <b>Closed</b> ${pair}\n` +
-    `PnL: ${sign}$${(pnlUsd ?? 0).toFixed(2)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)`
+    `🔒 <b>Closed</b> ${escapeHtml(pair)}\n` +
+    `PnL: ${sign}$${(pnlUsd ?? 0).toFixed(2)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)` +
+    (reason ? `\nReason: ${escapeHtml(reason)}` : "")
   );
 }
 
 export async function notifySwap({ inputSymbol, outputSymbol, amountIn, amountOut, tx }) {
   if (hasActiveLiveMessage()) return;
   await sendHTML(
-    `🔄 <b>Swapped</b> ${inputSymbol} → ${outputSymbol}\n` +
-    `In: ${amountIn ?? "?"} | Out: ${amountOut ?? "?"}\n` +
-    `Tx: <code>${tx?.slice(0, 16)}...</code>`
+    `🔄 <b>Swapped</b> ${escapeHtml(inputSymbol)} → ${escapeHtml(outputSymbol)}\n` +
+    `In: ${escapeHtml(amountIn ?? "?")} | Out: ${escapeHtml(amountOut ?? "?")}\n` +
+    `Tx: <code>${escapeHtml(tx?.slice(0, 16))}...</code>`
   );
 }
 
 export async function notifyOutOfRange({ pair, minutesOOR }) {
   if (hasActiveLiveMessage()) return;
   await sendHTML(
-    `⚠️ <b>Out of Range</b> ${pair}\n` +
-    `Been OOR for ${minutesOOR} minutes`
+    `⚠️ <b>Out of Range</b> ${escapeHtml(pair)}\n` +
+    `Been OOR for ${escapeHtml(minutesOOR)} minutes`
   );
 }
 

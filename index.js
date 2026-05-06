@@ -496,29 +496,54 @@ export async function runScreeningCycle({ silent = false } = {}) {
       await new Promise(r => setTimeout(r, 150)); // avoid 429s
     }
 
-    // Hard filters after token recon — block launchpads and excessive Jupiter bot holders
-    // Skipped for GMGN: platforms already filtered upstream; bundler/bot data from GMGN pipeline
+    // Hard filters after token recon.
+    //   Meteora-only: launchpad allow/block-lists and Jupiter audit bot-holders (GMGN platforms + bot_degen
+    //                 already filtered upstream).
+    //   Both paths:   minOrganic and maxBundlerPct — defense-in-depth final gates that catch candidates
+    //                 which slipped past the per-pipeline thresholds (GMGN's maxBundlerRate of 0.5 is
+    //                 looser than the screening-level cap; Jupiter organicScore needs to apply on the
+    //                 GMGN path too — without this gate, organic=33 tokens like MOGMAN-SOL get through).
     const filteredOut = [];
     const passing = allCandidates.filter(({ pool, ti }) => {
-      if (pool.gmgn) return true;
-      const launchpad = ti?.launchpad ?? null;
-      if (launchpad && config.screening.allowedLaunchpads?.length > 0 && !config.screening.allowedLaunchpads.includes(launchpad)) {
-        log("screening", `Skipping ${pool.name} — launchpad ${launchpad} not in allow-list`);
-        filteredOut.push({ name: pool.name, reason: `launchpad ${launchpad} not in allow-list` });
+      if (!pool.gmgn) {
+        const launchpad = ti?.launchpad ?? null;
+        if (launchpad && config.screening.allowedLaunchpads?.length > 0 && !config.screening.allowedLaunchpads.includes(launchpad)) {
+          log("screening", `Skipping ${pool.name} — launchpad ${launchpad} not in allow-list`);
+          filteredOut.push({ name: pool.name, reason: `launchpad ${launchpad} not in allow-list` });
+          return false;
+        }
+        if (launchpad && config.screening.blockedLaunchpads.includes(launchpad)) {
+          log("screening", `Skipping ${pool.name} — blocked launchpad (${launchpad})`);
+          filteredOut.push({ name: pool.name, reason: `blocked launchpad (${launchpad})` });
+          return false;
+        }
+        const botPct = ti?.audit?.bot_holders_pct;
+        const maxBotHoldersPct = config.screening.maxBotHoldersPct;
+        if (botPct != null && maxBotHoldersPct != null && botPct > maxBotHoldersPct) {
+          log("screening", `Bot-holder filter: dropped ${pool.name} — bots ${botPct}% > ${maxBotHoldersPct}%`);
+          filteredOut.push({ name: pool.name, reason: `bot holders ${botPct}% > ${maxBotHoldersPct}%` });
+          return false;
+        }
+      }
+
+      // Universal: minOrganic — applies to Meteora (pool.organic_score) AND GMGN (ti.organic_score from Jupiter)
+      const organicScore = pool.organic_score ?? pool.base?.organic ?? ti?.organic_score ?? null;
+      const minOrganic = config.screening.minOrganic;
+      if (organicScore != null && minOrganic != null && organicScore < minOrganic) {
+        log("screening", `Organic filter: dropped ${pool.name} — organic ${organicScore} < ${minOrganic}`);
+        filteredOut.push({ name: pool.name, reason: `organic ${organicScore} < ${minOrganic}` });
         return false;
       }
-      if (launchpad && config.screening.blockedLaunchpads.includes(launchpad)) {
-        log("screening", `Skipping ${pool.name} — blocked launchpad (${launchpad})`);
-        filteredOut.push({ name: pool.name, reason: `blocked launchpad (${launchpad})` });
+
+      // Universal: maxBundlerPct — GMGN bundler stat (preferred), GMGN security bundler (fallback), or OKX bundle_pct
+      const bundlerPct = pool.gmgn_token_info_bundler_pct ?? pool.gmgn_bundler_pct ?? pool.bundle_pct ?? null;
+      const maxBundlerPct = config.screening.maxBundlerPct;
+      if (bundlerPct != null && maxBundlerPct != null && bundlerPct > maxBundlerPct) {
+        log("screening", `Bundler filter: dropped ${pool.name} — bundler ${bundlerPct}% > ${maxBundlerPct}%`);
+        filteredOut.push({ name: pool.name, reason: `bundler ${bundlerPct}% > ${maxBundlerPct}%` });
         return false;
       }
-      const botPct = ti?.audit?.bot_holders_pct;
-      const maxBotHoldersPct = config.screening.maxBotHoldersPct;
-      if (botPct != null && maxBotHoldersPct != null && botPct > maxBotHoldersPct) {
-        log("screening", `Bot-holder filter: dropped ${pool.name} — bots ${botPct}% > ${maxBotHoldersPct}%`);
-        filteredOut.push({ name: pool.name, reason: `bot holders ${botPct}% > ${maxBotHoldersPct}%` });
-        return false;
-      }
+
       return true;
     });
 
@@ -804,6 +829,23 @@ Summarize the current portfolio health, total fees earned, and performance of al
             }
             continue;
           }
+          // Fast path for stop-loss: skip LLM round-trip, close directly to minimise rug-bleed.
+          if (exit.action === "STOP_LOSS" && config.management.directStopLossClose !== false) {
+            _managementBusy = true;
+            try {
+              log("state", `[PnL poll] Direct stop-loss close: ${p.pair} — ${exit.reason}`);
+              await executeTool("close_position", {
+                position_address: p.position,
+                reason: `auto: ${exit.reason}`,
+              });
+              _pollTriggeredAt = Date.now();
+            } catch (e) {
+              log("cron_error", `Direct stop-loss close failed for ${p.pair}: ${e.message}`);
+            } finally {
+              _managementBusy = false;
+            }
+            break;
+          }
           const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
           const sinceLastTrigger = Date.now() - _pollTriggeredAt;
           if (sinceLastTrigger >= cooldownMs) {
@@ -817,6 +859,23 @@ Summarize the current portfolio health, total fees earned, and performance of al
         }
         const closeRule = getDeterministicCloseRule(p, config.management);
         if (closeRule) {
+          // Fast path for deterministic stop-loss (rule 1): close directly, no LLM.
+          if (closeRule.rule === 1 && config.management.directStopLossClose !== false) {
+            _managementBusy = true;
+            try {
+              log("state", `[PnL poll] Direct stop-loss close: ${p.pair} — Rule 1: ${closeRule.reason}`);
+              await executeTool("close_position", {
+                position_address: p.position,
+                reason: `auto: ${closeRule.reason}`,
+              });
+              _pollTriggeredAt = Date.now();
+            } catch (e) {
+              log("cron_error", `Direct stop-loss close failed for ${p.pair}: ${e.message}`);
+            } finally {
+              _managementBusy = false;
+            }
+            break;
+          }
           const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
           const sinceLastTrigger = Date.now() - _pollTriggeredAt;
           if (sinceLastTrigger >= cooldownMs) {

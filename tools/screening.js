@@ -2,7 +2,7 @@ import { config } from "../config.js";
 import { isBlacklisted } from "../token-blacklist.js";
 import { isDevBlocked, getBlockedDevs } from "../dev-blocklist.js";
 import { log } from "../logger.js";
-import { isBaseMintOnCooldown, isPoolOnCooldown } from "../pool-memory.js";
+import { isBaseMintOnCooldown, isPoolOnCooldown, getRecentDeployVolatility } from "../pool-memory.js";
 import { confirmIndicatorPreset } from "./chart-indicators.js";
 import { discoverGmgnPools } from "./gmgn.js";
 
@@ -323,6 +323,19 @@ export async function getTopCandidates({ limit = 10 } = {}) {
         log("screening", `Filtered cooldown token ${p.base?.symbol} (${p.base?.mint?.slice(0, 8)})`);
         pushFilteredReason(filteredOut, p, "token cooldown active");
         return false;
+      }
+      // Volatility crash: reject if a recent deploy to this token had high volatility but the
+      // current candidate's volatility has collapsed (liquidity-drain / calm-before-rug pattern).
+      if (config.management.volatilityCrashEnabled && p.base?.mint && p.volatility != null) {
+        const lookback = config.management.volatilityCrashLookbackHours;
+        const minPrior = config.management.volatilityCrashMinPriorVol;
+        const maxCurrent = config.management.volatilityCrashMaxCurrentVol;
+        const { max: priorMax, sample } = getRecentDeployVolatility(p.base.mint, lookback);
+        if (sample > 0 && priorMax != null && priorMax >= minPrior && Number(p.volatility) <= maxCurrent) {
+          log("screening", `Volatility crash filter: dropped ${p.name} — vol ${p.volatility} ≤ ${maxCurrent} after recent deploy at vol ${priorMax} (${lookback}h window, ${sample} prior deploy(s))`);
+          pushFilteredReason(filteredOut, p, `volatility crash ${priorMax} → ${p.volatility} (last ${lookback}h)`);
+          return false;
+        }
       }
       return true;
     })

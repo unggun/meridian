@@ -206,12 +206,51 @@ export function recordPoolDeploy(poolAddress, deployData) {
     }
   }
 
+  // Post-close cooldown — applies to pool + base_mint after every close, regardless of outcome.
+  // Stops rapid-redeploy rug pattern where a winning close baits the agent back into a draining token.
+  // Only set if the candidate cooldown is longer than what's already in place (don't downgrade).
+  const redeployCooldownMin = Number(config.management.redeployCooldownMin ?? 60);
+  if (redeployCooldownMin > 0) {
+    const candidateUntilMs = Date.now() + redeployCooldownMin * 60 * 1000;
+    const cooldownHours = redeployCooldownMin / 60;
+    const reason = `post-close cooldown (${redeployCooldownMin}m)`;
+
+    const existingPoolUntilMs = entry.cooldown_until ? new Date(entry.cooldown_until).getTime() : 0;
+    if (existingPoolUntilMs < candidateUntilMs) {
+      setPoolCooldown(entry, cooldownHours, reason);
+    }
+
+    if (entry.base_mint) {
+      let existingMintUntilMs = 0;
+      for (const e of Object.values(db)) {
+        if (e?.base_mint === entry.base_mint && e?.base_mint_cooldown_until) {
+          const t = new Date(e.base_mint_cooldown_until).getTime();
+          if (t > existingMintUntilMs) existingMintUntilMs = t;
+        }
+      }
+      if (existingMintUntilMs < candidateUntilMs) {
+        const mintCooldownUntil = setBaseMintCooldown(db, entry.base_mint, cooldownHours, reason);
+        if (mintCooldownUntil) {
+          log("pool-memory", `Post-close base_mint cooldown for ${entry.base_mint.slice(0, 8)} until ${mintCooldownUntil}`);
+        }
+      }
+    }
+  }
+
   if (config.management.repeatDeployCooldownEnabled) {
     const triggerCount = Math.max(1, Number(config.management.repeatDeployCooldownTriggerCount ?? 3));
     const cooldownHours = Math.max(0, Number(config.management.repeatDeployCooldownHours ?? 12));
+    const lookbackHours = Math.max(0, Number(config.management.repeatDeployCooldownLookbackHours ?? 24));
     const rawScope = String(config.management.repeatDeployCooldownScope || "token").toLowerCase();
     const scope = ["pool", "token", "both"].includes(rawScope) ? rawScope : "token";
-    const recentRepeatDeploys = entry.deploys.slice(-triggerCount);
+    const lookbackCutoffMs = lookbackHours > 0 ? Date.now() - lookbackHours * 60 * 60 * 1000 : 0;
+    const withinLookback = lookbackHours > 0
+      ? entry.deploys.filter((d) => {
+          const t = d.closed_at ? new Date(d.closed_at).getTime() : 0;
+          return Number.isFinite(t) && t >= lookbackCutoffMs;
+        })
+      : entry.deploys;
+    const recentRepeatDeploys = withinLookback.slice(-triggerCount);
     const repeatedFeeGeneratingDeploys =
       cooldownHours > 0 &&
       recentRepeatDeploys.length >= triggerCount &&
@@ -253,6 +292,37 @@ export function isBaseMintOnCooldown(baseMint) {
     entry?.base_mint_cooldown_until &&
     new Date(entry.base_mint_cooldown_until) > now
   );
+}
+
+/**
+ * Return the maximum volatility_at_deploy seen for a base_mint within the lookback window.
+ * Used to detect "calm before rug" — significant volatility drop between past and current deploys
+ * to the same token suggests liquidity is being drained quietly.
+ *
+ * @param {string} baseMint
+ * @param {number} lookbackHours
+ * @returns {{ max: number|null, sample: number, latestAt: string|null }}
+ */
+export function getRecentDeployVolatility(baseMint, lookbackHours = 6) {
+  if (!baseMint) return { max: null, sample: 0, latestAt: null };
+  const db = load();
+  const cutoffMs = Date.now() - lookbackHours * 60 * 60 * 1000;
+  let max = null;
+  let sample = 0;
+  let latestAt = null;
+  for (const entry of Object.values(db)) {
+    if (entry?.base_mint !== baseMint) continue;
+    for (const d of entry.deploys || []) {
+      const closedAtMs = d.closed_at ? new Date(d.closed_at).getTime() : 0;
+      if (!Number.isFinite(closedAtMs) || closedAtMs < cutoffMs) continue;
+      const vol = Number(d.volatility_at_deploy);
+      if (!Number.isFinite(vol)) continue;
+      sample++;
+      if (max == null || vol > max) max = vol;
+      if (!latestAt || d.closed_at > latestAt) latestAt = d.closed_at;
+    }
+  }
+  return { max, sample, latestAt };
 }
 
 // ─── Read ──────────────────────────────────────────────────────

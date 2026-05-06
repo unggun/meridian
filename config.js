@@ -84,6 +84,7 @@ export const config = {
     avoidPvpSymbols:   u.avoidPvpSymbols   ?? true, // avoid exact-symbol rivals with real active pools
     blockPvpSymbols:   u.blockPvpSymbols   ?? false, // hard-filter PVP rivals before the LLM sees them
     maxBundlePct:      u.maxBundlePct      ?? 30,  // max bundle holding % (OKX advanced-info)
+    maxBundlerPct:     u.maxBundlerPct     ?? 40,  // max bundler trader % — hard gate applied to both Meteora and GMGN candidates
     maxBotHoldersPct:  u.maxBotHoldersPct  ?? 30,  // max bot holder addresses % (Jupiter audit)
     maxTop10Pct:       u.maxTop10Pct       ?? 60,  // max top 10 holders concentration
     allowedLaunchpads: u.allowedLaunchpads ?? [],  // allow-list launchpads, [] = no allow-list
@@ -159,12 +160,25 @@ export const config = {
     repeatDeployCooldownEnabled: u.repeatDeployCooldownEnabled ?? true,
     repeatDeployCooldownTriggerCount: u.repeatDeployCooldownTriggerCount ?? 3,
     repeatDeployCooldownHours: u.repeatDeployCooldownHours ?? 12,
+    repeatDeployCooldownLookbackHours: u.repeatDeployCooldownLookbackHours ?? 24,
     repeatDeployCooldownScope: u.repeatDeployCooldownScope ?? "token", // pool | token | both
     repeatDeployCooldownMinFeeEarnedPct: u.repeatDeployCooldownMinFeeEarnedPct ?? u.repeatDeployCooldownMinFeeYieldPct ?? 0,
     lossClusterCooldownTriggerCount: u.lossClusterCooldownTriggerCount ?? 2,
     lossClusterCooldownWindow:       u.lossClusterCooldownWindow       ?? 4,
     lossClusterCooldownHours:        u.lossClusterCooldownHours        ?? 24,
     lossClusterPnlThresholdPct:      u.lossClusterPnlThresholdPct      ?? -3,
+    // Short cooldown applied to pool + base_mint after EVERY close (win or loss).
+    // Prevents rapid-redeploy rug pattern where a winning close lures the agent
+    // back into the same token while liquidity is being drained.
+    redeployCooldownMin:             u.redeployCooldownMin             ?? 60,
+    // Direct-close in PnL poller when stop-loss triggers (skip LLM round-trip).
+    directStopLossClose:             u.directStopLossClose             ?? true,
+    // Volatility-crash detector: reject re-deploys to a token whose volatility has collapsed
+    // since a recent deploy (calm-before-rug pattern). Disabled when set to null/0.
+    volatilityCrashEnabled:          u.volatilityCrashEnabled          ?? true,
+    volatilityCrashLookbackHours:    u.volatilityCrashLookbackHours    ?? 6,
+    volatilityCrashMinPriorVol:      u.volatilityCrashMinPriorVol      ?? 5,
+    volatilityCrashMaxCurrentVol:    u.volatilityCrashMaxCurrentVol    ?? 2,
     minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
     stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
     takeProfitPct:         u.takeProfitPct         ?? u.takeProfitFeePct ?? 5,
@@ -319,6 +333,7 @@ export function reloadScreeningThresholds() {
     if (fresh.maxTokenAgeHours  !== undefined) s.maxTokenAgeHours = fresh.maxTokenAgeHours;
     if (fresh.athFilterPct      !== undefined) s.athFilterPct     = fresh.athFilterPct;
     if (fresh.maxBundlePct      != null) s.maxBundlePct     = fresh.maxBundlePct;
+    if (fresh.maxBundlerPct     != null) s.maxBundlerPct    = fresh.maxBundlerPct;
     if (fresh.avoidPvpSymbols   !== undefined) s.avoidPvpSymbols = fresh.avoidPvpSymbols;
     if (fresh.blockPvpSymbols   !== undefined) s.blockPvpSymbols = fresh.blockPvpSymbols;
     if (fresh.maxBotHoldersPct  != null) s.maxBotHoldersPct = fresh.maxBotHoldersPct;

@@ -37,9 +37,14 @@ import { getWeightsSummary } from "./signal-weights.js";
 import { bootstrapHiveMind, ensureAgentId, getHiveMindPullMode, isHiveMindEnabled, pullHiveMindLessons, pullHiveMindPresets, registerHiveMindAgent, startHiveMindBackgroundSync } from "./hivemind.js";
 import { appendDecision } from "./decision-log.js";
 
-const isMain = process.argv[1]
-  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-  : false;
+// Detect whether this file is the entry script (auto-start) or being imported
+// as a library (no auto-start). Under pm2, process.argv[1] is the pm2 wrapper
+// (ProcessContainerFork.js), so we also check pm_exec_path which pm2 sets to
+// the user's actual entry script.
+const __entry = fileURLToPath(import.meta.url);
+const isMain =
+  (process.argv[1] && path.resolve(process.argv[1]) === __entry) ||
+  (process.env.pm_exec_path && path.resolve(process.env.pm_exec_path) === __entry);
 
 if (isMain) {
   log("startup", "DLMM LP Agent starting...");

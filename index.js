@@ -27,7 +27,7 @@ import {
   createLiveMessage,
 } from "./telegram.js";
 import { generateBriefing } from "./briefing.js";
-import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, setPositionInstruction, updatePnlAndCheckExits, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop } from "./state.js";
+import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, setPositionInstruction, updatePnlAndCheckExits, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop, queuePendingTakeProfit, resolvePendingTakeProfit } from "./state.js";
 import { getActiveStrategy } from "./strategy-library.js";
 import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
@@ -85,6 +85,22 @@ function buildPrompt() {
   return `[manage: ${mgmt} | screen: ${scrn}]\n> `;
 }
 
+function formatRangeBar(p, width = 20) {
+  if (p.lower_bin == null || p.upper_bin == null || p.active_bin == null) return null;
+  const lo = Number(p.lower_bin), hi = Number(p.upper_bin), act = Number(p.active_bin);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || !Number.isFinite(act) || hi <= lo) return null;
+  const span = hi - lo;
+  const rawPct = ((act - lo) / span) * 100;
+  const clamped = Math.max(0, Math.min(100, rawPct));
+  const filled = Math.round((clamped / 100) * width);
+  const bar = "█".repeat(filled) + "░".repeat(width - filled);
+  let label;
+  if (act < lo) label = `${Math.round(rawPct)}% (below)`;
+  else if (act > hi) label = `${Math.round(rawPct)}% (above)`;
+  else label = `${Math.round(clamped)}% of range`;
+  return `[${bar}] ${label}`;
+}
+
 // ═══════════════════════════════════════════
 //  CRON DEFINITIONS
 // ═══════════════════════════════════════════
@@ -95,10 +111,12 @@ let _screeningLastTriggered = 0; // epoch ms — prevents management from spammi
 let _pollTriggeredAt = 0; // epoch ms — cooldown for poller-triggered management
 const _peakConfirmTimers = new Map();
 const _trailingDropConfirmTimers = new Map();
+const _takeProfitConfirmTimers = new Map();
 const TRAILING_PEAK_CONFIRM_DELAY_MS = 15_000;
 const TRAILING_PEAK_CONFIRM_TOLERANCE = 0.85;
 const TRAILING_DROP_CONFIRM_DELAY_MS = 15_000;
 const TRAILING_DROP_CONFIRM_TOLERANCE_PCT = 1.0;
+const TAKE_PROFIT_CONFIRM_DELAY_MS = 15_000;
 
 /** Strip <think>...</think> reasoning blocks that some models leak into output */
 function stripThink(text) {
@@ -162,6 +180,31 @@ function scheduleTrailingDropConfirmation(positionAddress) {
   }, TRAILING_DROP_CONFIRM_DELAY_MS);
 
   _trailingDropConfirmTimers.set(positionAddress, timer);
+}
+
+function scheduleTakeProfitConfirmation(positionAddress) {
+  if (!positionAddress || _takeProfitConfirmTimers.has(positionAddress)) return;
+
+  const timer = setTimeout(async () => {
+    _takeProfitConfirmTimers.delete(positionAddress);
+    try {
+      const result = await getMyPositions({ force: true, silent: true }).catch(() => null);
+      const position = result?.positions?.find((p) => p.position === positionAddress);
+      const resolved = resolvePendingTakeProfit(
+        positionAddress,
+        position?.pnl_pct ?? null,
+        config.management.takeProfitPct,
+      );
+      if (resolved?.confirmed) {
+        log("state", `[TP recheck] Confirmed take-profit for ${positionAddress} — triggering management`);
+        runManagementCycle({ silent: true }).catch((e) => log("cron_error", `TP recheck management failed: ${e.message}`));
+      }
+    } catch (error) {
+      log("state_warn", `Take-profit confirmation failed for ${positionAddress}: ${error.message}`);
+    }
+  }, TAKE_PROFIT_CONFIRM_DELAY_MS);
+
+  _takeProfitConfirmTimers.set(positionAddress, timer);
 }
 
 async function runBriefing() {
@@ -250,6 +293,12 @@ export async function runManagementCycle({ silent = false } = {}) {
           }
           continue;
         }
+        if (exit.action === "TAKE_PROFIT" && exit.needs_confirmation && shouldUsePnlRecheck()) {
+          if (queuePendingTakeProfit(p.position, exit.current_pnl_pct, config.management.takeProfitPct)) {
+            scheduleTakeProfitConfirmation(p.position);
+          }
+          continue;
+        }
         exitMap.set(p.position, exit.reason);
         log("state", `Exit alert for ${p.pair}: ${exit.reason}`);
       }
@@ -328,6 +377,8 @@ export async function runManagementCycle({ silent = false } = {}) {
       const unclaimed = config.management.solMode ? `◎${p.unclaimed_fees_usd ?? "?"}` : `$${p.unclaimed_fees_usd ?? "?"}`;
       const statusLabel = act.action === "INSTRUCTION" ? "HOLD (instruction)" : act.action;
       let line = `**${p.pair}** | Age: ${p.age_minutes ?? "?"}m | Val: ${val} | Unclaimed: ${unclaimed} | PnL: ${p.pnl_pct ?? "?"}% | Yield: ${p.fee_per_tvl_24h ?? "?"}% | ${inRange} | ${statusLabel}`;
+      const rangeBar = formatRangeBar(p);
+      if (rangeBar) line += `\n${rangeBar}`;
       if (p.instruction) line += `\nNote: "${p.instruction}"`;
       if (act.action === "CLOSE" && act.rule === "exit") line += `\n⚡ Trailing TP: ${act.reason}`;
       else if (act.action === "CLOSE" && act.rule === "chart_exit") line += `\n📉 Chart exit: ${act.reason}`;
@@ -894,6 +945,12 @@ Summarize the current portfolio health, total fees earned, and performance of al
             }
             continue;
           }
+          if (exit.action === "TAKE_PROFIT" && exit.needs_confirmation && shouldUsePnlRecheck()) {
+            if (queuePendingTakeProfit(p.position, exit.current_pnl_pct, config.management.takeProfitPct)) {
+              scheduleTakeProfitConfirmation(p.position);
+            }
+            continue;
+          }
           // Fast path for stop-loss: skip LLM round-trip, close directly to minimise rug-bleed.
           if (exit.action === "STOP_LOSS" && config.management.directStopLossClose !== false) {
             _managementBusy = true;
@@ -1015,9 +1072,8 @@ function getDeterministicCloseRule(position, managementConfig) {
   if (!pnlSuspect && position.pnl_pct != null && position.pnl_pct <= managementConfig.stopLossPct) {
     return { action: "CLOSE", rule: 1, reason: "stop loss" };
   }
-  if (!pnlSuspect && position.pnl_pct != null && position.pnl_pct >= managementConfig.takeProfitPct) {
-    return { action: "CLOSE", rule: 2, reason: "take profit" };
-  }
+  // Rule 2 (take profit) moved into updatePnlAndCheckExits — it now uses a 15s
+  // confirmation recheck to filter transient PnL spikes from the portfolio API.
   if (
     position.active_bin != null &&
     position.upper_bin != null &&

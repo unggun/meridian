@@ -332,6 +332,52 @@ export function resolvePendingTrailingDrop(position_address, currentPnlPct, trai
   return { confirmed: false, rejected: true };
 }
 
+export function queuePendingTakeProfit(position_address, candidatePnlPct, takeProfitPct) {
+  if (candidatePnlPct == null || takeProfitPct == null) return false;
+  if (candidatePnlPct < takeProfitPct) return false;
+
+  const state = load();
+  const pos = state.positions[position_address];
+  if (!pos || pos.closed) return false;
+
+  const changed =
+    pos.pending_tp_pnl_pct == null ||
+    candidatePnlPct > pos.pending_tp_pnl_pct;
+
+  if (!changed) return false;
+
+  pos.pending_tp_pnl_pct = candidatePnlPct;
+  pos.pending_tp_started_at = new Date().toISOString();
+  save(state);
+  log("state", `Position ${position_address} take-profit candidate ${candidatePnlPct.toFixed(2)}% queued for 15s confirmation (threshold ${takeProfitPct}%)`);
+  return true;
+}
+
+export function resolvePendingTakeProfit(position_address, currentPnlPct, takeProfitPct) {
+  const state = load();
+  const pos = state.positions[position_address];
+  if (!pos || pos.closed || pos.pending_tp_pnl_pct == null) {
+    return { confirmed: false, pending: false };
+  }
+
+  const pendingTp = pos.pending_tp_pnl_pct;
+  pos.pending_tp_pnl_pct = null;
+  pos.pending_tp_started_at = null;
+
+  if (currentPnlPct != null && takeProfitPct != null && currentPnlPct >= takeProfitPct) {
+    const reason = `Take profit: PnL ${currentPnlPct.toFixed(2)}% >= ${takeProfitPct}% (confirmed after 15s recheck, candidate was ${pendingTp.toFixed(2)}%)`;
+    pos.confirmed_tp_exit_reason = reason;
+    pos.confirmed_tp_exit_until = new Date(Date.now() + 30_000).toISOString();
+    save(state);
+    log("state", `Position ${position_address} take-profit confirmed after recheck: candidate ${pendingTp.toFixed(2)}%, current ${currentPnlPct.toFixed(2)}%`);
+    return { confirmed: true, reason };
+  }
+
+  save(state);
+  log("state", `Position ${position_address} rejected pending take-profit ${pendingTp.toFixed(2)}% after 15s recheck (current: ${currentPnlPct ?? "?"}%, threshold: ${takeProfitPct ?? "?"}%)`);
+  return { confirmed: false, rejected: true, pendingTp };
+}
+
 /**
  * Get all tracked positions (optionally filter open-only).
  */
@@ -406,6 +452,18 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     pos.confirmed_trailing_exit_until = null;
   }
 
+  if (pos.confirmed_tp_exit_until) {
+    if (new Date(pos.confirmed_tp_exit_until).getTime() > Date.now() && pos.confirmed_tp_exit_reason) {
+      const reason = pos.confirmed_tp_exit_reason;
+      pos.confirmed_tp_exit_reason = null;
+      pos.confirmed_tp_exit_until = null;
+      save(state);
+      return { action: "TAKE_PROFIT", reason, confirmed_recheck: true };
+    }
+    pos.confirmed_tp_exit_reason = null;
+    pos.confirmed_tp_exit_until = null;
+  }
+
   let changed = false;
 
   // Activate trailing TP once trigger threshold is reached
@@ -433,6 +491,17 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     return {
       action: "STOP_LOSS",
       reason: `Stop loss: PnL ${currentPnlPct.toFixed(2)}% <= ${mgmtConfig.stopLossPct}%`,
+    };
+  }
+
+  // ── Take profit (hard) ─────────────────────────────────────────
+  // Gated by 15s recheck to filter transient PnL spikes from the portfolio API.
+  if (!pnl_pct_suspicious && currentPnlPct != null && mgmtConfig.takeProfitPct != null && currentPnlPct >= mgmtConfig.takeProfitPct) {
+    return {
+      action: "TAKE_PROFIT",
+      reason: `Take profit: PnL ${currentPnlPct.toFixed(2)}% >= ${mgmtConfig.takeProfitPct}%`,
+      needs_confirmation: true,
+      current_pnl_pct: currentPnlPct,
     };
   }
 

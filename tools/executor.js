@@ -651,7 +651,7 @@ export async function executeTool(name, args) {
             if (token && token.usd >= 0.10) {
               const label = token.symbol || result.base_mint.slice(0, 8);
               log("executor", `Auto-swapping ${label} ($${token.usd.toFixed(2)}) back to SOL`);
-              const swapResult = await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: token.balance });
+              const swapResult = await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: token.balance, slippageBps: 500 });
               if (swapResult?.success) {
                 result.auto_swapped = true;
                 result.auto_swap_note = `Base token auto-swapped back to SOL (${label} → SOL). Do NOT call swap_token again.`;

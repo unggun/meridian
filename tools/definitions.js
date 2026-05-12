@@ -369,6 +369,10 @@ WARNING: This executes a real on-chain transaction.`,
             type: "number",
             description: "Amount of input token to swap (in human-readable units, not lamports)"
           },
+          slippageBps: {
+            type: "number",
+            description: "Optional max slippage in basis points (100 = 1%). Omit to let Jupiter pick dynamically. Use 500–1000 when retrying after an auto-swap failure on a volatile meme token."
+          },
         },
         required: ["input_mint", "output_mint", "amount"]
       }

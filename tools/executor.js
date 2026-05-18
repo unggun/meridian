@@ -800,6 +800,18 @@ async function runSafetyChecks(name, args) {
         };
       }
 
+      // Reject when base_mint was filled with the pool address. These are
+      // distinct on-chain account types and can never collide for a real
+      // Meteora DLMM pool/mint pair — equality means the caller copied the
+      // pool address into both fields, which silently bypasses the duplicate
+      // and indicator checks below.
+      if (args.base_mint && args.pool_address && args.base_mint === args.pool_address) {
+        return {
+          pass: false,
+          reason: `base_mint must be the SPL token mint, not the pool address. Got base_mint=pool_address=${args.pool_address}. Re-read the candidate's base.mint field.`,
+        };
+      }
+
       // Block same base token across different pools
       if (args.base_mint) {
         const alreadyHasMint = positions.positions.some(
@@ -857,10 +869,18 @@ async function runSafetyChecks(name, args) {
             mint: args.base_mint,
             side: "entry",
           });
-          if (confirmation && confirmation.enabled && !confirmation.confirmed && !confirmation.skipped) {
+          if (confirmation && confirmation.enabled && !confirmation.confirmed) {
             return {
               pass: false,
               reason: `Entry indicator rejected at deploy: ${confirmation.reason || "Supertrend not confirming entry"}. Trend likely flipped since screening — skip this deploy.`,
+            };
+          }
+          // Fail closed when every interval fetch errored — committing capital
+          // without a confirmed entry signal is worse than waiting a cycle.
+          if (confirmation && confirmation.enabled && confirmation.skipped) {
+            return {
+              pass: false,
+              reason: `Entry indicator check unavailable (${confirmation.reason}). Refusing to deploy without supertrend confirmation — retry next cycle.`,
             };
           }
 
@@ -880,8 +900,11 @@ async function runSafetyChecks(name, args) {
             }
           }
         } catch (err) {
-          // Fail open — indicator API errors shouldn't block deploys
           log("safety", `indicator check error for ${args.base_mint?.slice(0,8)}: ${err.message}`);
+          return {
+            pass: false,
+            reason: `Entry indicator check failed (${err.message}). Refusing to deploy without confirmation — retry next cycle.`,
+          };
         }
       }
 

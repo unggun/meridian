@@ -8,6 +8,7 @@ import {
   claimFees,
   closePosition,
   searchPools,
+  getPoolBaseMint,
 } from "./dlmm.js";
 import { getWalletBalances, swapToken } from "./wallet.js";
 import { studyTopLPers } from "./study.js";
@@ -800,29 +801,28 @@ async function runSafetyChecks(name, args) {
         };
       }
 
-      // Reject when base_mint was filled with the pool address. These are
-      // distinct on-chain account types and can never collide for a real
-      // Meteora DLMM pool/mint pair — equality means the caller copied the
-      // pool address into both fields, which silently bypasses the duplicate
-      // and indicator checks below.
-      if (args.base_mint && args.pool_address && args.base_mint === args.pool_address) {
+      // Resolve base mint from the pool itself — the LLM's base_mint arg is
+      // ignored. Trusting on-chain pool.tokenXMint eliminates a class of
+      // failures where the LLM copied the pool address into base_mint.
+      let resolvedBaseMint = null;
+      try {
+        resolvedBaseMint = await getPoolBaseMint(args.pool_address);
+      } catch (err) {
         return {
           pass: false,
-          reason: `base_mint must be the SPL token mint, not the pool address. Got base_mint=pool_address=${args.pool_address}. Re-read the candidate's base.mint field.`,
+          reason: `Could not resolve pool ${args.pool_address} on-chain (${err.message}). Pool address may be invalid.`,
         };
       }
 
       // Block same base token across different pools
-      if (args.base_mint) {
-        const alreadyHasMint = positions.positions.some(
-          (p) => p.base_mint === args.base_mint
-        );
-        if (alreadyHasMint) {
-          return {
-            pass: false,
-            reason: `Already holding base token ${args.base_mint} in another pool. One position per token only.`,
-          };
-        }
+      const alreadyHasMint = positions.positions.some(
+        (p) => p.base_mint === resolvedBaseMint
+      );
+      if (alreadyHasMint) {
+        return {
+          pass: false,
+          reason: `Already holding base token ${resolvedBaseMint} in another pool. One position per token only.`,
+        };
       }
 
       // Check amount limits
@@ -863,10 +863,10 @@ async function runSafetyChecks(name, args) {
 
       // Supertrend entry freshness — screen-time check can be minutes stale.
       // Reject if entry preset no longer confirms at deploy moment.
-      if (config.indicators?.enabled && args.base_mint) {
+      if (config.indicators?.enabled && resolvedBaseMint) {
         try {
           const confirmation = await confirmIndicatorPreset({
-            mint: args.base_mint,
+            mint: resolvedBaseMint,
             side: "entry",
           });
           if (confirmation && confirmation.enabled && !confirmation.confirmed) {
@@ -900,7 +900,7 @@ async function runSafetyChecks(name, args) {
             }
           }
         } catch (err) {
-          log("safety", `indicator check error for ${args.base_mint?.slice(0,8)}: ${err.message}`);
+          log("safety", `indicator check error for ${resolvedBaseMint?.slice(0,8)}: ${err.message}`);
           return {
             pass: false,
             reason: `Entry indicator check failed (${err.message}). Refusing to deploy without confirmation — retry next cycle.`,

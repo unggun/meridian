@@ -27,7 +27,7 @@ import {
   createLiveMessage,
 } from "./telegram.js";
 import { generateBriefing } from "./briefing.js";
-import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, setPositionInstruction, updatePnlAndCheckExits, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop, queuePendingTakeProfit, resolvePendingTakeProfit } from "./state.js";
+import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, getTrackedPositions, setPositionInstruction, updatePnlAndCheckExits, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop, queuePendingTakeProfit, resolvePendingTakeProfit } from "./state.js";
 import { getActiveStrategy } from "./strategy-library.js";
 import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
@@ -37,14 +37,10 @@ import { getWeightsSummary } from "./signal-weights.js";
 import { bootstrapHiveMind, ensureAgentId, getHiveMindPullMode, isHiveMindEnabled, pullHiveMindLessons, pullHiveMindPresets, registerHiveMindAgent, startHiveMindBackgroundSync } from "./hivemind.js";
 import { appendDecision } from "./decision-log.js";
 
-// Detect whether this file is the entry script (auto-start) or being imported
-// as a library (no auto-start). Under pm2, process.argv[1] is the pm2 wrapper
-// (ProcessContainerFork.js), so we also check pm_exec_path which pm2 sets to
-// the user's actual entry script.
-const __entry = fileURLToPath(import.meta.url);
-const isMain =
-  (process.argv[1] && path.resolve(process.argv[1]) === __entry) ||
-  (process.env.pm_exec_path && path.resolve(process.env.pm_exec_path) === __entry);
+const entrypointPath = process.env.pm_exec_path || process.argv[1];
+const isMain = entrypointPath
+  ? path.resolve(entrypointPath) === fileURLToPath(import.meta.url)
+  : false;
 
 if (isMain) {
   log("startup", "DLMM LP Agent starting...");
@@ -748,7 +744,9 @@ export async function runScreeningCycle({ silent = false } = {}) {
 
       // Stage signals for Darwinian weighting — captured before LLM decides
       if (config.darwin?.enabled) {
+        const baseMint = pool.base?.mint || pool.base_mint || ti?.mint || null;
         stageSignals(pool.pool, {
+          base_mint:             baseMint,
           organic_score:         pool.organic_score         ?? null,
           fee_tvl_ratio:         pool.fee_active_tvl_ratio  ?? null,
           volume:                pool.volume_window         ?? null,
@@ -925,6 +923,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
   let _pnlPollBusy = false;
   const pnlPollInterval = setInterval(async () => {
     if (_managementBusy || _screeningBusy || _pnlPollBusy) return;
+    if (getTrackedPositions(true).length === 0) return;
     _pnlPollBusy = true;
     try {
       const result = await getMyPositions({ force: true, silent: true }).catch(() => null);
@@ -1024,11 +1023,43 @@ Summarize the current portfolio health, total fees earned, and performance of al
 // ═══════════════════════════════════════════
 //  GRACEFUL SHUTDOWN
 // ═══════════════════════════════════════════
+let _shuttingDown = false;
+
+function withTimeout(promise, ms) {
+  let timer = null;
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(null), ms);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 async function shutdown(signal) {
+  if (_shuttingDown) {
+    log("shutdown", `Received ${signal} while shutdown is already in progress.`);
+    return;
+  }
+  _shuttingDown = true;
+
   log("shutdown", `Received ${signal}. Shutting down...`);
   stopPolling();
-  const positions = await getMyPositions();
-  log("shutdown", `Open positions at shutdown: ${positions.total_positions}`);
+  stopCronJobs();
+
+  const positions = await withTimeout(
+    getMyPositions({ force: true, silent: true }).catch((error) => {
+      log("shutdown", `Position snapshot failed during shutdown: ${error.message}`);
+      return null;
+    }),
+    5000
+  );
+  if (positions) {
+    log("shutdown", `Open positions at shutdown: ${positions.total_positions}`);
+  } else {
+    log("shutdown", "Open position snapshot skipped during shutdown timeout");
+  }
   process.exit(0);
 }
 

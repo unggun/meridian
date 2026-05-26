@@ -874,6 +874,16 @@ async function runSafetyChecks(name, args) {
             mint: resolvedBaseMint,
             side: "entry",
           });
+          // Record the raw indicator payload alongside every deploy gate
+          // outcome — without it, recurrences of the stale-supertrendBreakUp
+          // bypass (grail-SOL 2026-05-26 15:18Z) cannot be diagnosed from logs.
+          if (confirmation && confirmation.enabled && Array.isArray(confirmation.intervals)) {
+            const primary = confirmation.intervals.find((i) => i.ok) || confirmation.intervals[0];
+            log(
+              "safety",
+              `deploy-time indicator ${resolvedBaseMint.slice(0, 8)} confirmed=${confirmation.confirmed} reason="${confirmation.reason}" signal=${JSON.stringify(primary?.signal || null)}`,
+            );
+          }
           if (confirmation && confirmation.enabled && !confirmation.confirmed) {
             return {
               pass: false,

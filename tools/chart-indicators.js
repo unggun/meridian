@@ -62,6 +62,15 @@ function evaluatePreset(side, preset, payload) {
   const rsi = summary.rsi;
   const isBullish = summary.supertrendDirection === "bullish";
   const isBearish = summary.supertrendDirection === "bearish";
+  // Veto entry confirmations whenever close < supertrendValue, regardless of
+  // direction or `supertrendBreakUp`. The upstream break flag has been seen
+  // sticky from an earlier candle after price already fell back through ST
+  // (Stake-SOL 2026-05-25 16:09Z bearish-direction; grail-SOL 2026-05-26
+  // 15:18Z non-bearish-direction with stale flag).
+  const priceBelowST =
+    close != null &&
+    summary.supertrendValue != null &&
+    close < summary.supertrendValue;
   const crossedUp = (level) =>
     level != null &&
     close != null &&
@@ -77,17 +86,25 @@ function evaluatePreset(side, preset, payload) {
 
   switch (preset) {
     case "supertrend_break":
-      return side === "entry"
-        ? {
-            confirmed: summary.supertrendBreakUp || (isBullish && close != null && summary.supertrendValue != null && close >= summary.supertrendValue),
-            reason: summary.supertrendBreakUp ? "Supertrend flipped bullish" : "Price is above bullish Supertrend",
-            signal: summary,
-          }
-        : {
-            confirmed: summary.supertrendBreakDown || (isBearish && close != null && summary.supertrendValue != null && close <= summary.supertrendValue),
-            reason: summary.supertrendBreakDown ? "Supertrend flipped bearish" : "Price is below bearish Supertrend",
+      if (side === "entry") {
+        if (priceBelowST) {
+          return {
+            confirmed: false,
+            reason: `Defensive veto: close ${close} < supertrend ${summary.supertrendValue} (direction=${summary.supertrendDirection}, breakUp=${summary.supertrendBreakUp}) — upstream break flag ignored`,
             signal: summary,
           };
+        }
+        return {
+          confirmed: summary.supertrendBreakUp || (isBullish && close != null && summary.supertrendValue != null && close >= summary.supertrendValue),
+          reason: summary.supertrendBreakUp ? "Supertrend flipped bullish" : "Price is above bullish Supertrend",
+          signal: summary,
+        };
+      }
+      return {
+        confirmed: summary.supertrendBreakDown || (isBearish && close != null && summary.supertrendValue != null && close <= summary.supertrendValue),
+        reason: summary.supertrendBreakDown ? "Supertrend flipped bearish" : "Price is below bearish Supertrend",
+        signal: summary,
+      };
     case "rsi_reversal":
       return side === "entry"
         ? {
@@ -113,6 +130,13 @@ function evaluatePreset(side, preset, payload) {
             signal: summary,
           };
     case "rsi_plus_supertrend":
+      if (side === "entry" && priceBelowST) {
+        return {
+          confirmed: false,
+          reason: `Defensive veto: close ${close} < supertrend ${summary.supertrendValue} (direction=${summary.supertrendDirection}, breakUp=${summary.supertrendBreakUp}) — upstream break flag ignored`,
+          signal: summary,
+        };
+      }
       return side === "entry"
         ? {
             confirmed:

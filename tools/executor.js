@@ -430,6 +430,8 @@ const toolMap = {
       gmgnMinTotalFeeSol: ["gmgn", "minTotalFeeSol"],
       gmgnIndicatorFilter: ["gmgn", "indicatorFilter"],
       gmgnIndicatorInterval: ["gmgn", "indicatorInterval"],
+      gmgnIndicatorIntervals: ["gmgn", "indicatorIntervals"],
+      gmgnRequireAllIndicatorIntervals: ["gmgn", "requireAllIndicatorIntervals"],
       gmgnRequireBullishSt: ["gmgn", "indicatorRules", "requireBullishSupertrend"],
       gmgnRejectAtBottom: ["gmgn", "indicatorRules", "rejectAlreadyAtBottom"],
       gmgnRequireAboveSt: ["gmgn", "indicatorRules", "requireAboveSupertrend"],
@@ -447,6 +449,8 @@ const toolMap = {
       rsiOverbought: ["indicators", "rsiOverbought", ["chartIndicators", "rsiOverbought"]],
       maxEntryRsi: ["indicators", "maxEntryRsi", ["chartIndicators", "maxEntryRsi"]],
       requireAllIntervals: ["indicators", "requireAllIntervals", ["chartIndicators", "requireAllIntervals"]],
+      supertrendExitEnabled: ["indicators", "supertrendExitEnabled", ["chartIndicators", "supertrendExitEnabled"]],
+      supertrendExitInterval: ["indicators", "supertrendExitInterval", ["chartIndicators", "supertrendExitInterval"]],
     };
 
     const applied = {};
@@ -873,6 +877,7 @@ async function runSafetyChecks(name, args) {
           const confirmation = await confirmIndicatorPreset({
             mint: resolvedBaseMint,
             side: "entry",
+            refresh: true,
           });
           // Record the raw indicator payload alongside every deploy gate
           // outcome — without it, recurrences of the stale-supertrendBreakUp

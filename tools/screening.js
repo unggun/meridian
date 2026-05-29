@@ -777,6 +777,7 @@ export async function getTopCandidates({ limit = 10 } = {}) {
           const confirmation = await confirmIndicatorPreset({
             mint: pool.base?.mint,
             side: "entry",
+            refresh: true,
           });
           return { pool: pool.pool, confirmation };
         } catch (error) {

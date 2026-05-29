@@ -9,7 +9,7 @@ import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
 import { getWalletBalances } from "./tools/wallet.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { formatGmgnCandidateForPrompt } from "./tools/gmgn.js";
-import { confirmIndicatorPreset } from "./tools/chart-indicators.js";
+import { confirmIndicatorPreset, evaluateIntervalPreset } from "./tools/chart-indicators.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
@@ -308,7 +308,7 @@ export async function runManagementCycle({ silent = false } = {}) {
       );
       if (underwater.length > 0) {
         const results = await Promise.allSettled(
-          underwater.map((p) => confirmIndicatorPreset({ mint: p.base_mint, side: "exit" })),
+          underwater.map((p) => confirmIndicatorPreset({ mint: p.base_mint, side: "exit", refresh: true })),
         );
         underwater.forEach((p, i) => {
           const r = results[i];
@@ -324,6 +324,35 @@ export async function runManagementCycle({ silent = false } = {}) {
             const reason = firedInterval?.reason || v.reason || "Bearish chart signal";
             indicatorExitMap.set(p.position, reason);
             log("state", `Chart exit alert for ${p.pair}: ${reason}`);
+          }
+        });
+      }
+    }
+
+    // ── Supertrend breakdown exit (independent of PnL and chart-exit toggle) ──
+    // Closes on a bearish supertrend flip (or price below a bearish supertrend)
+    // on the configured interval, even when the position is in profit.
+    if (config.indicators?.supertrendExitEnabled) {
+      const interval = String(config.indicators.supertrendExitInterval || "15_MINUTE").trim().toUpperCase();
+      const candidates = positionData.filter(
+        (p) => p.base_mint && !exitMap.has(p.position) && !indicatorExitMap.has(p.position),
+      );
+      if (candidates.length > 0) {
+        const results = await Promise.allSettled(
+          candidates.map((p) =>
+            evaluateIntervalPreset({ mint: p.base_mint, side: "exit", preset: "supertrend_break", interval, refresh: true }),
+          ),
+        );
+        candidates.forEach((p, i) => {
+          const r = results[i];
+          if (r.status !== "fulfilled") {
+            log("state_warn", `Supertrend exit check failed for ${p.pair}: ${r.reason?.message || r.reason}`);
+            return;
+          }
+          if (r.value?.confirmed) {
+            const reason = `${interval} supertrend: ${r.value.reason}`;
+            indicatorExitMap.set(p.position, reason);
+            log("state", `Supertrend exit alert for ${p.pair}: ${reason}`);
           }
         });
       }
@@ -1153,7 +1182,13 @@ function getLoneCandidateSkipReason({ pool, sw, n, ti } = {}) {
   const smartWalletCount = Math.max(sw?.in_pool?.length ?? 0, Number(pool.gmgn_smart_wallets ?? 0) || 0);
   const tokenInfo = ti || {};
   const hasNarrative = !!n?.narrative;
-  const globalFeesSol = Number(tokenInfo.global_fees_sol ?? pool.gmgn_total_fee_sol);
+  // Align fee gate to the active screening source: GMGN candidates use GMGN's
+  // total_fee, Meteora candidates use Jupiter's fees. Avoids mixing two providers
+  // (which disagree) and prevents a silent bypass when the off-source field is absent.
+  const usingGmgn = config.screening.source === "gmgn";
+  const globalFeesSol = usingGmgn
+    ? Number(pool.gmgn_total_fee_sol ?? tokenInfo.global_fees_sol)
+    : Number(tokenInfo.global_fees_sol ?? pool.gmgn_total_fee_sol);
   const top10Pct = Number(tokenInfo.audit?.top_holders_pct ?? pool.gmgn_token_info_top10_pct ?? pool.gmgn_top10_holder_pct);
   const botPct = Number(tokenInfo.audit?.bot_holders_pct ?? pool.gmgn_bot_degen_pct);
   if (pool.is_wash) return "wash trading was flagged";

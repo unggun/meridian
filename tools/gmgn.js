@@ -2,14 +2,32 @@ import { randomUUID } from "crypto";
 import { setDefaultResultOrder } from "dns";
 import { config } from "../config.js";
 import { log } from "../logger.js";
-import { fetchChartIndicatorsForMint } from "./chart-indicators.js";
+import { fetchChartIndicatorsForMint, normalizeIntervals } from "./chart-indicators.js";
 
 // Force IPv4 — GMGN OpenAPI does not support IPv6
 setDefaultResultOrder("ipv4first");
 
 const METEORA_DLMM_API = "https://dlmm.datapi.meteora.ag";
 const SUPPORTED_INTERVALS = new Set(["1m", "5m", "1h", "6h", "24h"]);
+const MIN_VOLATILITY_TIMEFRAME = "30m";
+const TIMEFRAME_MINUTES = {
+  "5m": 5,
+  "15m": 15,
+  "30m": 30,
+  "1h": 60,
+  "2h": 120,
+  "4h": 240,
+  "12h": 720,
+  "24h": 1440,
+};
 let lastGmgnRequestAt = 0;
+
+function getVolatilityTimeframe(sourceTimeframe) {
+  const source = String(sourceTimeframe || "").trim();
+  const sourceMinutes = TIMEFRAME_MINUTES[source];
+  const minMinutes = TIMEFRAME_MINUTES[MIN_VOLATILITY_TIMEFRAME];
+  return sourceMinutes != null && sourceMinutes >= minMinutes ? source : MIN_VOLATILITY_TIMEFRAME;
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -205,7 +223,7 @@ function analyzeTokenInfo(info = {}) {
   const smartWallets = num(tags.smart_wallets);
   const kolWallets = num(tags.renowned_wallets);
   const tradeFeeSol = num(info.trade_fee);
-  const price = num(info.price);
+  const price = num(info.price?.price ?? info.price);
   const athPrice = num(info.ath_price);
   const priceVsAthPct = athPrice > 0 && price > 0 ? (price / athPrice) * 100 : null;
   const athFilter = g.athFilterPct;
@@ -323,37 +341,57 @@ async function fetchTopMeteoraDlmmPoolsForMint(mint, minTvl = 0, limit = 2) {
     .slice(0, limit);
 }
 
-async function fetchPoolDetailDirect(poolAddress) {
+async function fetchPoolDetailDirect(poolAddress, timeframe = MIN_VOLATILITY_TIMEFRAME) {
   // Always use Meteora's public Pool Discovery API — the server-side endpoint
   // (api.agentmeridian.xyz) returns stale/fee=0 data for some pools.
   const discoveryBase = "https://pool-discovery-api.datapi.meteora.ag";
-  const url = `${discoveryBase}/pools?page_size=1&filter_by=${encodeURIComponent(`pool_address=${poolAddress}`)}&timeframe=5m`;
+  const url = `${discoveryBase}/pools?page_size=1&filter_by=${encodeURIComponent(`pool_address=${poolAddress}`)}&timeframe=${timeframe}`;
   const res = await fetch(url);
   if (!res.ok) return null;
   const data = await res.json();
   return (data?.data || [])[0] ?? null;
 }
 
-async function pickBestPool(pools) {
+async function pickBestPool(pools, timeframe = MIN_VOLATILITY_TIMEFRAME) {
   const details = await Promise.all(
     pools.map((pool) =>
-      fetchPoolDetailDirect(pool.address || pool.pool_address).catch(() => null)
+      fetchPoolDetailDirect(pool.address || pool.pool_address, timeframe).catch(() => null)
     )
   );
-  if (pools.length <= 1) return { pool: pools[0] ?? null, detail: details[0] ?? null };
-  const scored = pools.map((pool, i) => {
-    const d = details[i];
-    const activeTvl = num(d?.active_tvl ?? pool.active_tvl ?? pool.tvl ?? pool.liquidity);
-    const feeActiveTvlRatio = Number.isFinite(Number(d?.fee_active_tvl_ratio))
-      ? Number(d.fee_active_tvl_ratio)
-      : 0;
-    return { pool, detail: d, feeActiveTvlRatio, activeTvl };
-  });
-  scored.sort((a, b) => b.feeActiveTvlRatio - a.feeActiveTvlRatio || b.activeTvl - a.activeTvl);
-  return { pool: scored[0].pool, detail: scored[0].detail };
+
+  let chosenPool;
+  let chosenDetail;
+  if (pools.length <= 1) {
+    chosenPool = pools[0] ?? null;
+    chosenDetail = details[0] ?? null;
+  } else {
+    const scored = pools.map((pool, i) => {
+      const d = details[i];
+      const activeTvl = num(d?.active_tvl ?? pool.active_tvl ?? pool.tvl ?? pool.liquidity);
+      const feeActiveTvlRatio = Number.isFinite(Number(d?.fee_active_tvl_ratio))
+        ? Number(d.fee_active_tvl_ratio)
+        : 0;
+      return { pool, detail: d, feeActiveTvlRatio, activeTvl };
+    });
+    scored.sort((a, b) => b.feeActiveTvlRatio - a.feeActiveTvlRatio || b.activeTvl - a.activeTvl);
+    chosenPool = scored[0].pool;
+    chosenDetail = scored[0].detail;
+  }
+
+  const volatilityTimeframe = getVolatilityTimeframe(timeframe);
+  let volatilityDetail = chosenDetail;
+  if (chosenPool && volatilityTimeframe !== timeframe) {
+    const refetched = await fetchPoolDetailDirect(
+      chosenPool.address || chosenPool.pool_address,
+      volatilityTimeframe,
+    ).catch(() => null);
+    if (refetched) volatilityDetail = refetched;
+  }
+
+  return { pool: chosenPool, detail: chosenDetail, volatilityDetail, volatilityTimeframe };
 }
 
-function condenseGmgnCandidate({ token, pool, poolDetail, security, info, infoAnalysis, holdersAnalysis, indicatorSignal }) {
+function condenseGmgnCandidate({ token, pool, poolDetail, volatilityDetail = poolDetail, volatilityTimeframe = MIN_VOLATILITY_TIMEFRAME, security, info, infoAnalysis, holdersAnalysis, indicatorSignal }) {
   const poolAddress = pool.address || pool.pool_address;
   // Stage 5 Pool Discovery provides active_tvl and fee_active_tvl_ratio
   // Stage 3 Meteora search provides tvl and bin_step/base_fee_pct via pool_config
@@ -395,13 +433,14 @@ function condenseGmgnCandidate({ token, pool, poolDetail, security, info, infoAn
     tvl: round(tvl),
     active_tvl: round(activeTvl),
     fee_active_tvl_ratio: feeActiveTvlRatio,
-    volatility: poolDetail?.volatility != null ? Number(Number(poolDetail.volatility).toFixed(2)) : null,
+    volatility: volatilityDetail?.volatility != null ? Number(Number(volatilityDetail.volatility).toFixed(4)) : null,
+    volatility_timeframe: volatilityTimeframe,
     // Stage 1 GMGN rank: token-level metrics
     holders: num(token.holder_count || info.holder_count),
-    mcap: round(num(token.market_cap || (num(info.price) * num(info.circulating_supply)))),
+    mcap: round(num(token.market_cap || (num(info.price?.price ?? info.price) * num(info.circulating_supply)))),
     token_age_hours: token.open_timestamp ? Math.floor((Date.now() / 1000 - num(token.open_timestamp)) / 3600) : null,
     dev: info.dev?.creator_address || null,
-    price: num(info.price || token.price),
+    price: num(info.price?.price ?? info.price ?? token.price),
     price_change_pct: num(token.price_change_percent5m ?? token.price_change_percent),
     volume: num(token.volume ?? 0),
     swap_count: token.swaps ?? null,
@@ -449,9 +488,8 @@ function condenseGmgnCandidate({ token, pool, poolDetail, security, info, infoAn
 // Token dumps down through bins (fees collected) then bounces back up (more fees).
 // Need: (1) token not already at bottom — needs room to dump into range,
 //        (2) overall bullish trend — guarantees the bounce back.
-async function checkBounceSetup(mint) {
-  const interval = String(config.gmgn.indicatorInterval || "15_MINUTE").trim().toUpperCase();
-  const payload = await fetchChartIndicatorsForMint(mint, { interval });
+// Evaluate the bounce-setup rules against a single interval's indicator payload.
+function evaluateBouncePayload(payload, rules, interval) {
   const latest = payload?.latest || {};
   const st = latest?.supertrend || {};
   const stValue = Number(st.value) || 0;
@@ -481,7 +519,6 @@ async function checkBounceSetup(mint) {
     else rsiLabel = "neutral";
   }
 
-  const rules = config.gmgn.indicatorRules || {};
   const reasons = [];
 
   if (rules.requireBullishSupertrend !== false && !isBullish)
@@ -503,7 +540,6 @@ async function checkBounceSetup(mint) {
     reasons.push(`BB position ${bbPosition} ≠ required ${rules.requireBbPosition}`);
 
   return {
-    passed: reasons.length === 0,
     reasons,
     signal: {
       interval,
@@ -515,6 +551,57 @@ async function checkBounceSetup(mint) {
       aboveSupertrend: close > 0 && stValue > 0 ? close >= stValue : null,
     },
   };
+}
+
+// Multi-timeframe bounce confirmation. The Meridian chart-indicators endpoint
+// accepts only ONE interval per request (5_MINUTE or 15_MINUTE), so each
+// configured interval is fetched separately and the verdicts combined:
+//   requireAllIndicatorIntervals=true  → every available interval must pass (AND)
+//   requireAllIndicatorIntervals=false → at least one must pass (OR)
+// Intervals whose fetch fails are dropped; if none return data we throw so the
+// caller skips the filter (matches the prior single-interval behaviour rather
+// than silently rejecting the candidate).
+async function checkBounceSetup(mint) {
+  const configured = normalizeIntervals(config.gmgn.indicatorIntervals);
+  const fallback = normalizeIntervals([config.gmgn.indicatorInterval || "15_MINUTE"]);
+  const targets = [...new Set(configured.length ? configured : fallback)];
+  const safeTargets = targets.length ? targets : ["15_MINUTE"];
+  const requireAll = config.gmgn.requireAllIndicatorIntervals !== false;
+  const rules = config.gmgn.indicatorRules || {};
+
+  const perInterval = [];
+  for (const interval of safeTargets) {
+    try {
+      const payload = await fetchChartIndicatorsForMint(mint, { interval, refresh: true });
+      const { reasons, signal } = evaluateBouncePayload(payload, rules, interval);
+      perInterval.push({ interval, ok: true, passed: reasons.length === 0, reasons, signal });
+    } catch (error) {
+      perInterval.push({ interval, ok: false, passed: false, reasons: [`fetch failed: ${error.message}`], signal: null });
+    }
+  }
+
+  const evaluated = perInterval.filter((p) => p.ok);
+  if (evaluated.length === 0) {
+    throw new Error(perInterval.flatMap((p) => p.reasons).join(" | ") || "no indicator data");
+  }
+
+  const passedCount = evaluated.filter((p) => p.passed).length;
+  const passed = requireAll ? passedCount === evaluated.length : passedCount > 0;
+
+  const reasons = passed
+    ? []
+    : (requireAll ? evaluated.filter((p) => !p.passed) : evaluated)
+        .flatMap((p) => p.reasons.map((r) => `${p.interval}: ${r}`));
+
+  // Primary signal for display/storage: a passing interval if any, else the last evaluated.
+  const primary = (passed ? evaluated.find((p) => p.passed) : null) || evaluated[evaluated.length - 1];
+  const signal = {
+    ...primary.signal,
+    interval: evaluated.map((p) => p.interval).join("+"),
+    intervals: evaluated.map((p) => ({ passed: p.passed, ...p.signal })),
+  };
+
+  return { passed, reasons, signal };
 }
 
 export async function discoverGmgnPools({ limit = 10 } = {}) {
@@ -630,13 +717,13 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
     if (pools.length >= limit) break;
     const mint = token.address;
     try {
-      const { pool, detail: poolDetail } = await pickBestPool(topPools);
+      const { pool, detail: poolDetail, volatilityDetail, volatilityTimeframe } = await pickBestPool(topPools, config.screening.timeframe);
       if (!pool) {
         filtered.push({ stage: 5, name: token.symbol || mint, reason: "pool selection failed" });
         continue;
       }
       const security = {};
-      const candidate = condenseGmgnCandidate({ token, pool, poolDetail, security, info, infoAnalysis: infoCheck, holdersAnalysis: holdersCheck, indicatorSignal });
+      const candidate = condenseGmgnCandidate({ token, pool, poolDetail, volatilityDetail, volatilityTimeframe, security, info, infoAnalysis: infoCheck, holdersAnalysis: holdersCheck, indicatorSignal });
       if (!candidate.pool || !candidate.base?.mint) {
         filtered.push({ stage: 5, name: token.symbol || mint, reason: "incomplete pool mapping" });
         continue;

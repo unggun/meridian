@@ -1,5 +1,6 @@
 import { config } from "../config.js";
 import { log } from "../logger.js";
+import { fetchGmgnIndicatorPayload } from "./gmgn-indicators.js";
 
 const DEFAULT_INTERVALS = ["5_MINUTE"];
 const DEFAULT_CANDLES = 298;
@@ -14,7 +15,7 @@ function getHeaders() {
   return headers;
 }
 
-function normalizeIntervals(intervals) {
+export function normalizeIntervals(intervals) {
   const list = Array.isArray(intervals) ? intervals : DEFAULT_INTERVALS;
   return list
     .map((value) => String(value || "").trim().toUpperCase())
@@ -235,7 +236,35 @@ function evaluatePreset(side, preset, payload) {
   }
 }
 
-export async function fetchChartIndicatorsForMint(
+// Fetch one interval and evaluate a single preset, independent of the global
+// `config.indicators.enabled` gate. The caller decides whether to invoke this.
+// Returns { confirmed, reason, signal } from evaluatePreset.
+export async function evaluateIntervalPreset({ mint, side, preset, interval, refresh = false }) {
+  const normalized = normalizeIntervals([interval]);
+  const target = normalized[0] || "15_MINUTE";
+  const payload = await fetchChartIndicatorsForMint(mint, { interval: target, refresh });
+  return evaluatePreset(side, preset, payload);
+}
+
+// Source-dispatching entry point. Default "meridian" preserves the existing endpoint
+// path exactly. "gmgn" computes from GMGN klines and falls back to meridian on ANY
+// failure (rate-limit, network, empty/insufficient data) so worst case == prior behavior.
+export async function fetchChartIndicatorsForMint(mint, opts = {}) {
+  const source = String(config.gmgn?.indicatorSource || "meridian").toLowerCase();
+  if (source === "gmgn") {
+    try {
+      return await fetchGmgnIndicatorPayload(mint, {
+        interval: opts.interval,
+        rsiLength: opts.rsiLength ?? config.indicators?.rsiLength ?? 2,
+      });
+    } catch (error) {
+      log("indicators_warn", `GMGN indicator source failed for ${String(mint).slice(0, 8)} ${opts.interval || ""}: ${error.message} — falling back to meridian`);
+    }
+  }
+  return fetchMeridianIndicatorPayload(mint, opts);
+}
+
+async function fetchMeridianIndicatorPayload(
   mint,
   {
     interval,

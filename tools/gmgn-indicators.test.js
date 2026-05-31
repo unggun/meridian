@@ -101,3 +101,42 @@ test("computeSupertrend reports bearish on a sustained downtrend", () => {
 test("computeSupertrend returns null when not enough data", () => {
   assert.equal(computeSupertrend([ohlc(1, 1, 1)], 10, 3), null);
 });
+import { computeIndicators } from "./gmgn-indicators.js";
+
+function syntheticCandles(n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const close = 100 + Math.sin(i / 3) * 5 + i * 0.1;
+    out.push({ time: 1_700_000_000_000 + i * 60_000, open: close, high: close + 1, low: close - 1, close, volume: 10 });
+  }
+  return out;
+}
+
+test("computeIndicators returns the full latest payload shape", () => {
+  const candles = syntheticCandles(60);
+  const { latest } = computeIndicators(candles, {
+    supertrendPeriod: 10, supertrendMultiplier: 3,
+    bollingerPeriod: 20, bollingerStdDev: 2,
+    rsiLength: 2, fibLookbackBars: 55,
+  });
+  // Required fields every consumer reads:
+  assert.ok(latest.candle && typeof latest.candle.close === "number");
+  assert.ok(latest.previousCandle && typeof latest.previousCandle.close === "number");
+  assert.ok(latest.rsi && typeof latest.rsi.value === "number");
+  assert.ok(latest.bollinger && typeof latest.bollinger.upper === "number");
+  assert.ok(typeof latest.bollinger.lower === "number");
+  assert.ok(typeof latest.bollinger.middle === "number");
+  assert.ok(latest.supertrend && typeof latest.supertrend.value === "number");
+  assert.ok(["bullish", "bearish"].includes(latest.supertrend.direction));
+  assert.ok(latest.states && typeof latest.states.supertrendBreakUp === "boolean");
+  assert.ok(typeof latest.states.supertrendBreakDown === "boolean");
+  assert.ok(latest.fibonacci && latest.fibonacci.levels);
+  assert.ok("0.618" in latest.fibonacci.levels);
+});
+
+test("computeIndicators throws on insufficient candles", () => {
+  assert.throws(() => computeIndicators(syntheticCandles(5), {
+    supertrendPeriod: 10, supertrendMultiplier: 3,
+    bollingerPeriod: 20, bollingerStdDev: 2, rsiLength: 2, fibLookbackBars: 55,
+  }), /insufficient/i);
+});

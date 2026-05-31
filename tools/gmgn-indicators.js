@@ -135,3 +135,55 @@ export function computeSupertrend(candles, period = 10, multiplier = 3) {
     breakDown: prevDirNum === 1 && dirNum === -1,
   };
 }
+
+// Best-effort Fibonacci retracement levels from the swing high/low of the last N bars.
+// Approximate by design (the upstream feed may anchor swings differently). Present so
+// the payload shape is complete; the fibo_* presets are not in active use.
+export function computeFibonacci(candles, lookbackBars = 55) {
+  const window = candles.slice(-Math.max(2, lookbackBars));
+  const high = Math.max(...window.map((c) => c.high));
+  const low = Math.min(...window.map((c) => c.low));
+  const span = high - low;
+  const level = (ratio) => high - span * ratio;
+  return {
+    levels: {
+      "0.236": level(0.236),
+      "0.382": level(0.382),
+      "0.500": level(0.5),
+      "0.618": level(0.618),
+      "0.786": level(0.786),
+    },
+  };
+}
+
+// Orchestrate all indicators into the payload shape consumers expect.
+// Throws if there is insufficient data to compute the core indicators — the seam
+// catches this and falls back to the Meridian endpoint.
+export function computeIndicators(candles, params) {
+  if (!Array.isArray(candles) || candles.length < 2) {
+    throw new Error("insufficient kline data for indicators");
+  }
+  const closes = candles.map((c) => c.close);
+  const supertrend = computeSupertrend(candles, params.supertrendPeriod, params.supertrendMultiplier);
+  const bollinger = computeBollinger(closes, params.bollingerPeriod, params.bollingerStdDev);
+  const rsi = computeRsi(closes, params.rsiLength);
+  if (!supertrend || !bollinger || rsi == null) {
+    throw new Error("insufficient kline data for indicators");
+  }
+  const last = candles[candles.length - 1];
+  const prev = candles[candles.length - 2];
+  return {
+    latest: {
+      candle: { open: last.open, high: last.high, low: last.low, close: last.close },
+      previousCandle: { close: prev.close },
+      rsi: { value: rsi },
+      bollinger: { upper: bollinger.upper, middle: bollinger.middle, lower: bollinger.lower },
+      supertrend: { value: supertrend.value, direction: supertrend.direction },
+      states: {
+        supertrendBreakUp: supertrend.breakUp,
+        supertrendBreakDown: supertrend.breakDown,
+      },
+      fibonacci: computeFibonacci(candles, params.fibLookbackBars),
+    },
+  };
+}

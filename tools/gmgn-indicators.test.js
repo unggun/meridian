@@ -140,3 +140,37 @@ test("computeIndicators throws on insufficient candles", () => {
     bollingerPeriod: 20, bollingerStdDev: 2, rsiLength: 2, fibLookbackBars: 55,
   }), /insufficient/i);
 });
+import { fetchGmgnIndicatorPayload, __setKlineFetcherForTest, __clearKlineCacheForTest } from "./gmgn-indicators.js";
+
+function fakeKlines(n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const close = 100 + Math.sin(i / 5) * 3 + i * 0.05;
+    out.push({ time: 1_700_000_000_000 + i * 60_000, open: close, high: close + 0.5, low: close - 0.5, close, volume: 5 });
+  }
+  return out;
+}
+
+test("fetchGmgnIndicatorPayload reuses one fetch for 5m and 15m within TTL", async () => {
+  __clearKlineCacheForTest();
+  let calls = 0;
+  __setKlineFetcherForTest(async () => { calls += 1; return fakeKlines(300); });
+
+  const five = await fetchGmgnIndicatorPayload("MINT1", { interval: "5_MINUTE", rsiLength: 2 });
+  const fifteen = await fetchGmgnIndicatorPayload("MINT1", { interval: "15_MINUTE", rsiLength: 2 });
+
+  assert.equal(calls, 1, "second interval should hit the per-mint cache");
+  assert.ok(five.latest.supertrend.value > 0);
+  assert.ok(fifteen.latest.supertrend.value > 0);
+  __setKlineFetcherForTest(null); // restore real fetcher
+});
+
+test("fetchGmgnIndicatorPayload throws when the feed returns too few candles", async () => {
+  __clearKlineCacheForTest();
+  __setKlineFetcherForTest(async () => fakeKlines(3));
+  await assert.rejects(
+    () => fetchGmgnIndicatorPayload("MINT2", { interval: "5_MINUTE", rsiLength: 2 }),
+    /insufficient/i,
+  );
+  __setKlineFetcherForTest(null);
+});

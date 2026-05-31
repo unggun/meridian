@@ -1,3 +1,6 @@
+import { config } from "../config.js";
+import { gmgnFetch } from "./gmgn-client.js";   // leaf client — NOT gmgn.js (avoids import cycle)
+
 // Compute chart indicators from GMGN klines, matching the payload shape that
 // tools/chart-indicators.js consumers expect. Pure functions + one cached fetch.
 
@@ -186,4 +189,73 @@ export function computeIndicators(candles, params) {
       fibonacci: computeFibonacci(candles, params.fibLookbackBars),
     },
   };
+}
+
+const INTERVAL_MINUTES = { "5_MINUTE": 5, "15_MINUTE": 15 };
+const KLINE_LIMIT = 300; // 298 warmup + headroom
+
+// Default indicator params; overridden by config.gmgn.indicatorParams.
+export const DEFAULT_INDICATOR_PARAMS = {
+  supertrendPeriod: 10,
+  supertrendMultiplier: 3,
+  bollingerPeriod: 20,
+  bollingerStdDev: 2,
+  fibLookbackBars: 55,
+  klineCacheTtlSec: 30,
+};
+
+function indicatorParams() {
+  return { ...DEFAULT_INDICATOR_PARAMS, ...(config.gmgn?.indicatorParams || {}) };
+}
+
+// Per-mint 1m-kline cache: Map<mint, { klines, ts }>. In-memory, TTL-bounded, no disk.
+const klineCache = new Map();
+
+// Injectable fetcher for tests. When null, the real GMGN fetch is used.
+let klineFetcher = null;
+export function __setKlineFetcherForTest(fn) { klineFetcher = fn; }
+export function __clearKlineCacheForTest() { klineCache.clear(); }
+
+async function realFetch1mKlines(mint) {
+  const payload = await gmgnFetch("/v1/market/token_kline", {
+    params: { chain: "sol", address: mint, resolution: "1m", limit: KLINE_LIMIT },
+  });
+  const list =
+    payload?.data?.list ?? payload?.list ?? payload?.data ?? [];
+  if (!Array.isArray(list)) return [];
+  // Normalize to numbers, ascending by time.
+  return list
+    .map((k) => ({
+      time: Number(k.time),
+      open: Number(k.open),
+      high: Number(k.high),
+      low: Number(k.low),
+      close: Number(k.close),
+      volume: Number(k.volume),
+    }))
+    .filter((k) => Number.isFinite(k.time) && Number.isFinite(k.close))
+    .sort((a, b) => a.time - b.time);
+}
+
+async function getCached1mKlines(mint) {
+  const ttlMs = Math.max(0, Number(indicatorParams().klineCacheTtlSec)) * 1000;
+  const hit = klineCache.get(mint);
+  if (hit && ttlMs > 0 && Date.now() - hit.ts < ttlMs) return hit.klines;
+  const fetcher = klineFetcher || realFetch1mKlines;
+  const klines = await fetcher(mint);
+  klineCache.set(mint, { klines, ts: Date.now() });
+  return klines;
+}
+
+// Top-level: produce the Meridian-shaped { latest } payload from GMGN klines.
+// Throws on insufficient data or fetch failure — caller (the seam) falls back.
+export async function fetchGmgnIndicatorPayload(mint, { interval, rsiLength } = {}) {
+  const minutes = INTERVAL_MINUTES[String(interval || "").trim().toUpperCase()] || 5;
+  const klines1m = await getCached1mKlines(mint);
+  if (!Array.isArray(klines1m) || klines1m.length === 0) {
+    throw new Error("GMGN returned empty kline list");
+  }
+  const resampled = resampleKlines(klines1m, minutes);
+  const params = { ...indicatorParams(), rsiLength: Number(rsiLength) || 2 };
+  return computeIndicators(resampled, params);
 }

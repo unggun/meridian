@@ -518,6 +518,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
   let prePositions, preBalance;
   let liveMessage = null;
   let screenReport = null;
+  let fee24hGateLine = null;
   try {
     [prePositions, preBalance] = await Promise.all([getMyPositions({ force: true }), getWalletBalances()]);
     if (prePositions.total_positions >= config.risk.maxPositions) {
@@ -579,6 +580,14 @@ export async function runScreeningCycle({ silent = false } = {}) {
     const earlyFilteredExamples = topCandidates?.filtered_examples || [];
     const gmgnStageCounts = topCandidates?.stage_counts ?? null;
     const gmgnAllFiltered = topCandidates?.all_filtered ?? [];
+    const fee24hGate = topCandidates?.fee24h_gate ?? null;
+    if (fee24hGate && fee24hGate.wouldDrop.length > 0) {
+      const verb = fee24hGate.logOnly ? "would fail" : "failed";
+      const names = fee24hGate.wouldDrop
+        .map((d) => `${d.name} ${d.ratio}%`)
+        .join(", ");
+      fee24hGateLine = `24h fee/TVL${fee24hGate.logOnly ? " (log-only)" : ""}: ${fee24hGate.wouldDrop.length}/${fee24hGate.evaluated} ${verb} <${fee24hGate.floor}% — ${names}`;
+    }
 
     const allCandidates = [];
     for (const pool of candidates) {
@@ -769,7 +778,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
           : null;
         block = [
           `POOL: ${pool.name} (${pool.pool})`,
-          `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.tvl ?? pool.active_tvl}, volatility_${pool.volatility_timeframe || "30m"}=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
+          `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, fee/TVL_24h=${pool.fee_tvl_ratio_24h ?? "?"}%, vol=$${pool.volume_window}, tvl=$${pool.tvl ?? pool.active_tvl}, volatility_${pool.volatility_timeframe || "30m"}=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
           `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
           gmgnPriceLine,
           pvpLine,
@@ -913,6 +922,11 @@ IMPORTANT:
     screenReport = `Screening cycle failed: ${error.message}`;
   } finally {
     _screeningBusy = false;
+    if (fee24hGateLine) {
+      screenReport = screenReport
+        ? `${screenReport}\n\n${fee24hGateLine}`
+        : fee24hGateLine;
+    }
     if (!silent && telegramEnabled()) {
       if (screenReport) {
         if (liveMessage) await liveMessage.finalize(stripThink(screenReport)).catch(() => {});

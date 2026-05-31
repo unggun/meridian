@@ -1,11 +1,7 @@
-import { randomUUID } from "crypto";
-import { setDefaultResultOrder } from "dns";
 import { config } from "../config.js";
 import { log } from "../logger.js";
+import { gmgnFetch } from "./gmgn-client.js";
 import { fetchChartIndicatorsForMint, normalizeIntervals } from "./chart-indicators.js";
-
-// Force IPv4 — GMGN OpenAPI does not support IPv6
-setDefaultResultOrder("ipv4first");
 
 const METEORA_DLMM_API = "https://dlmm.datapi.meteora.ag";
 const SUPPORTED_INTERVALS = new Set(["1m", "5m", "1h", "6h", "24h"]);
@@ -20,7 +16,6 @@ const TIMEFRAME_MINUTES = {
   "12h": 720,
   "24h": 1440,
 };
-let lastGmgnRequestAt = 0;
 
 function getVolatilityTimeframe(sourceTimeframe) {
   const source = String(sourceTimeframe || "").trim();
@@ -29,87 +24,11 @@ function getVolatilityTimeframe(sourceTimeframe) {
   return sourceMinutes != null && sourceMinutes >= minMinutes ? source : MIN_VOLATILITY_TIMEFRAME;
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function paceGmgnRequest() {
-  const delayMs = Math.max(0, Number(config.gmgn?.requestDelayMs ?? 2500));
-  if (!delayMs) return;
-  const elapsed = Date.now() - lastGmgnRequestAt;
-  if (elapsed < delayMs) await sleep(delayMs - elapsed);
-  lastGmgnRequestAt = Date.now();
-}
-
-function getApiKey() {
-  const key = config.gmgn?.apiKey || process.env.GMGN_API_KEY;
-  if (!key) throw new Error("GMGN_API_KEY is required when screeningSource=gmgn.");
-  return key;
-}
-
 function normalizeInterval(value, fallback = "5m") {
   const normalized = String(value || fallback).trim();
   return SUPPORTED_INTERVALS.has(normalized) ? normalized : fallback;
 }
 
-
-function appendParams(url, params = {}) {
-  for (const [key, value] of Object.entries(params)) {
-    if (value == null) continue;
-    if (Array.isArray(value)) {
-      for (const entry of value.filter((item) => item != null && item !== "")) {
-        url.searchParams.append(key, String(entry));
-      }
-    } else {
-      url.searchParams.set(key, String(value));
-    }
-  }
-}
-
-async function gmgnFetch(pathname, { method = "GET", params = {}, body = null } = {}) {
-  const baseUrl = String(config.gmgn?.baseUrl || "https://openapi.gmgn.ai").replace(/\/+$/, "");
-  const url = new URL(`${baseUrl}${pathname}`);
-  appendParams(url, {
-    ...params,
-    timestamp: Math.floor(Date.now() / 1000),
-    client_id: randomUUID(),
-  });
-
-  const maxRetries = Math.max(0, Number(config.gmgn?.maxRetries ?? 2));
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    await paceGmgnRequest();
-    const res = await fetch(url, {
-      method,
-      headers: {
-        "X-APIKEY": getApiKey(),
-        "Content-Type": "application/json",
-      },
-      body: body ? JSON.stringify(body) : null,
-    });
-    const text = await res.text().catch(() => "");
-    let payload = {};
-    try {
-      payload = text ? JSON.parse(text) : {};
-    } catch {
-      payload = { raw: text };
-    }
-    const message = payload?.message || payload?.error || payload?.raw || `GMGN ${pathname} ${res.status}`;
-    const rateLimited = res.status === 429 || /rate limit|temporarily banned/i.test(String(message));
-    if (res.ok) return payload;
-    if (rateLimited && attempt < maxRetries) {
-      const retryAfter = Number(res.headers.get("retry-after"));
-      const backoffMs = Number.isFinite(retryAfter)
-        ? retryAfter * 1000
-        : /temporarily banned/i.test(String(message))
-          ? 60000
-          : Math.min(30000, 3000 * Math.pow(2, attempt));
-      await sleep(backoffMs);
-      continue;
-    }
-    throw new Error(message);
-  }
-  throw new Error(`GMGN ${pathname} failed`);
-}
 
 function unwrapList(payload, keys = ["list", "rank", "data"]) {
   if (Array.isArray(payload)) return payload;
@@ -754,6 +673,7 @@ export function formatGmgnCandidateForPrompt(p) {
 
   const tvl = p.tvl != null ? `tvl=$${(p.tvl / 1000).toFixed(1)}k` : p.active_tvl != null ? `tvl=$${(p.active_tvl / 1000).toFixed(1)}k` : "";
   const feeTvl = p.fee_active_tvl_ratio != null ? `fee/tvl=${p.fee_active_tvl_ratio}%` : "";
+  const feeTvl24h = p.fee_tvl_ratio_24h != null ? `fee/tvl_24h=${p.fee_tvl_ratio_24h}%` : "";
   const vol = p.volume_window != null ? `vol=$${(p.volume_window / 1000).toFixed(1)}k` : "";
   const volatility = Number.isFinite(Number(p.volatility)) && Number(p.volatility) > 0 ? `volatility=${p.volatility}` : "volatility=unknown";
   const ath = p.price_vs_ath_pct != null ? `price_vs_ath=${p.price_vs_ath_pct.toFixed(0)}%` : "";
@@ -800,7 +720,7 @@ export function formatGmgnCandidateForPrompt(p) {
   }
 
   const header = [sym, launchpad, age, mcap, binStep].filter(Boolean).join(" | ");
-  const pool = [tvl, feeTvl, vol, volatility, ath].filter(Boolean).join(" | ");
+  const pool = [tvl, feeTvl, feeTvl24h, vol, volatility, ath].filter(Boolean).join(" | ");
   const risk = [top10, dev, bot, fresh, bundler].filter(Boolean).join(" | ");
   const traction = [holders, fees, smart, kol].filter(Boolean).join(" | ");
 

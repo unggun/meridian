@@ -23,3 +23,30 @@ export function resampleKlines(klines1m, targetMinutes) {
   }
   return out;
 }
+
+// Wilder's RSI of the final close. Returns null if insufficient data.
+// Needs length+1 closes minimum; uses all available history for smoothing.
+export function computeRsi(closes, length = 2) {
+  if (!Array.isArray(closes) || closes.length < length + 1) return null;
+  let avgGain = 0;
+  let avgLoss = 0;
+  // Seed with the first `length` deltas (simple average).
+  for (let i = 1; i <= length; i++) {
+    const delta = closes[i] - closes[i - 1];
+    if (delta >= 0) avgGain += delta;
+    else avgLoss -= delta;
+  }
+  avgGain /= length;
+  avgLoss /= length;
+  // Wilder-smooth across the rest.
+  for (let i = length + 1; i < closes.length; i++) {
+    const delta = closes[i] - closes[i - 1];
+    const gain = delta > 0 ? delta : 0;
+    const loss = delta < 0 ? -delta : 0;
+    avgGain = (avgGain * (length - 1) + gain) / length;
+    avgLoss = (avgLoss * (length - 1) + loss) / length;
+  }
+  if (avgLoss === 0) return avgGain === 0 ? 50 : 100;
+  const rs = avgGain / avgLoss;
+  return 100 - 100 / (1 + rs);
+}

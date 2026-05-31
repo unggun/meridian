@@ -39,3 +39,20 @@ test("resampleKlines drops an incomplete trailing bucket only if it has zero can
 test("resampleKlines returns [] for empty input", () => {
   assert.deepEqual(resampleKlines([], 5), []);
 });
+import { computeRsi } from "./gmgn-indicators.js";
+
+test("computeRsi returns 100 for a strictly rising close series", () => {
+  const closes = [1, 2, 3, 4, 5, 6, 7, 8];
+  const rsi = computeRsi(closes, 2);
+  assert.ok(rsi > 99.9, `expected ~100, got ${rsi}`);
+});
+
+test("computeRsi returns 0 for a strictly falling close series", () => {
+  const closes = [8, 7, 6, 5, 4, 3, 2, 1];
+  const rsi = computeRsi(closes, 2);
+  assert.ok(rsi < 0.1, `expected ~0, got ${rsi}`);
+});
+
+test("computeRsi returns null when not enough data", () => {
+  assert.equal(computeRsi([1, 2], 2), null);
+});

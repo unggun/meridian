@@ -12,6 +12,8 @@ export function resampleKlines(klines1m, targetMinutes) {
   if (!Array.isArray(klines1m) || klines1m.length === 0) return [];
   const size = Math.max(1, Math.floor(targetMinutes));
   const out = [];
+  // NOTE: index-based bucketing assumes contiguous, gap-free 1m candles; a missing
+  // minute would shift later candles into the wrong bucket.
   for (let i = 0; i < klines1m.length; i += size) {
     const bucket = klines1m.slice(i, i + size);
     if (bucket.length === 0) continue;
@@ -101,9 +103,15 @@ export function computeSupertrend(candles, period = 10, multiplier = 3) {
   }
 
   // Supertrend bands + direction.
-  let direction = "bullish"; // 1 = bullish (uptrend), tracked as string at the end
-  let dirNum = 1;
-  let prevDirNum = 1;
+  // Seed the initial direction from the first evaluated bar's price position relative
+  // to its basic mid-band (HL2) instead of assuming bullish: close >= mid → bullish,
+  // else bearish. This avoids reporting bullish on a token whose early candles are in a
+  // downtrend but haven't crossed the lower band yet.
+  const seedIdx = period - 1;
+  const seedMid = (candles[seedIdx].high + candles[seedIdx].low) / 2;
+  let dirNum = candles[seedIdx].close >= seedMid ? 1 : -1;
+  let prevDirNum = dirNum;
+  let direction = dirNum === 1 ? "bullish" : "bearish";
   let finalUpper = null;
   let finalLower = null;
   let supertrend = null;
@@ -243,7 +251,11 @@ async function getCached1mKlines(mint) {
   if (hit && ttlMs > 0 && Date.now() - hit.ts < ttlMs) return hit.klines;
   const fetcher = klineFetcher || realFetch1mKlines;
   const klines = await fetcher(mint);
-  klineCache.set(mint, { klines, ts: Date.now() });
+  // Only cache a usable (non-empty) result. A transient empty GMGN response must not
+  // poison the cache for the whole TTL window and suppress the GMGN path.
+  if (Array.isArray(klines) && klines.length > 0) {
+    klineCache.set(mint, { klines, ts: Date.now() });
+  }
   return klines;
 }
 

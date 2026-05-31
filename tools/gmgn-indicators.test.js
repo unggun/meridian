@@ -101,6 +101,24 @@ test("computeSupertrend reports bearish on a sustained downtrend", () => {
 test("computeSupertrend returns null when not enough data", () => {
   assert.equal(computeSupertrend([ohlc(1, 1, 1)], 10, 3), null);
 });
+
+test("computeSupertrend seeds direction from price on a short declining series", () => {
+  // period+2 candles, every bar gently declining and closing at its low so each
+  // close sits below its HL2 mid. The lower-band flip never triggers in this short
+  // window, so direction is decided entirely by the initial seed. An unconditional
+  // bullish seed wrongly reports "bullish" here; a price-derived seed reports "bearish".
+  const period = 10;
+  const candles = [];
+  let price = 100;
+  for (let i = 0; i < period + 2; i++) {
+    const open = price;
+    const close = price - 1;               // gentle 1-unit decline
+    candles.push(ohlc(open, close, close)); // high=open, low=close => HL2 mid = close + 0.5 > close
+    price = close;
+  }
+  const st = computeSupertrend(candles, period, 3);
+  assert.equal(st.direction, "bearish", "first evaluated bar closes below its HL2 mid → bearish seed");
+});
 import { computeIndicators } from "./gmgn-indicators.js";
 
 function syntheticCandles(n) {
@@ -172,5 +190,27 @@ test("fetchGmgnIndicatorPayload throws when the feed returns too few candles", a
     () => fetchGmgnIndicatorPayload("MINT2", { interval: "5_MINUTE", rsiLength: 2 }),
     /insufficient/i,
   );
+  __setKlineFetcherForTest(null);
+});
+
+test("fetchGmgnIndicatorPayload does not cache a transient empty kline list", async () => {
+  __clearKlineCacheForTest();
+  let calls = 0;
+  // First fetch returns [] (transient empty), second returns real data.
+  __setKlineFetcherForTest(async () => {
+    calls += 1;
+    return calls === 1 ? [] : fakeKlines(300);
+  });
+
+  // First call rejects because the feed was empty...
+  await assert.rejects(
+    () => fetchGmgnIndicatorPayload("MINTEMPTY", { interval: "5_MINUTE", rsiLength: 2 }),
+    /empty/i,
+  );
+  // ...and because the empty result was NOT cached, the second call re-fetches and succeeds.
+  const payload = await fetchGmgnIndicatorPayload("MINTEMPTY", { interval: "5_MINUTE", rsiLength: 2 });
+  assert.equal(calls, 2, "second call must re-fetch (empty result not cached)");
+  assert.ok(payload.latest.supertrend.value > 0);
+
   __setKlineFetcherForTest(null);
 });

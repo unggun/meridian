@@ -193,6 +193,28 @@ const actualBaseFee = baseFactor > 0
 
 ---
 
+## Chart Indicator Source (gmgn-config.json)
+
+`fetchChartIndicatorsForMint` (tools/chart-indicators.js) dispatches on
+`config.gmgn.indicatorSource`:
+- `"meridian"` (default) — precomputed indicators from `api.agentmeridian.xyz` (unchanged legacy path).
+- `"gmgn"` — computes supertrend/RSI/Bollinger from GMGN 1m klines (tools/gmgn-indicators.js),
+  resampled to 5m/15m. Falls back to meridian on ANY failure (rate-limit, network, empty data),
+  so worst case == legacy behavior.
+
+Flip via `gmgn-config.json` (`"indicatorSource": "gmgn"`) or `/setcfg gmgnIndicatorSource gmgn`.
+Math params live in `config.gmgn.indicatorParams` (baked-in defaults in tools/gmgn-indicators.js
+`DEFAULT_INDICATOR_PARAMS`; override per-key in gmgn-config.json `indicatorParams`). 1m klines are
+fetched once per mint per cycle (in-memory TTL cache, `klineCacheTtlSec`) and resampled locally to
+both intervals — one GMGN call covers 5m and 15m. The HTTP client + shared rate-limit throttle live
+in tools/gmgn-client.js (a leaf module both gmgn.js and gmgn-indicators.js import, avoiding a cycle).
+
+The supertrend seed direction is intentionally derived from price vs HL2 on the first evaluated bar
+(not assumed bullish); this is a deliberate divergence from stock TradingView seeding. Validate
+decision-level parity before flipping: `node scripts/validate-gmgn-indicators.js [<mint>...]`.
+
+---
+
 ## Model Configuration
 
 - Default model: `process.env.LLM_MODEL` or `openrouter/healer-alpha`

@@ -104,6 +104,7 @@ export function trackPosition({
     confirmed_trailing_exit_reason: null,
     confirmed_trailing_exit_until: null,
     trailing_active: false,
+    pending_chart_exit_since: null,
   };
   pushEvent(state, { action: "deploy", position, pool_name: pool_name || pool });
   save(state);
@@ -376,6 +377,43 @@ export function resolvePendingTakeProfit(position_address, currentPnlPct, takePr
   save(state);
   log("state", `Position ${position_address} rejected pending take-profit ${pendingTp.toFixed(2)}% after 15s recheck (current: ${currentPnlPct ?? "?"}%, threshold: ${takeProfitPct ?? "?"}%)`);
   return { confirmed: false, rejected: true, pendingTp };
+}
+
+// ─── Chart-exit debounce ───────────────────────────────────────
+// A bearish chart signal (supertrend break) must persist across TWO consecutive
+// management cycles before it closes a position. A single cycle's signal only arms the
+// debounce; the next cycle confirms (or, if the signal has cleared, disarms). This guards
+// against a one-fetch indicator artifact cutting a fresh position. Pure + side-effect-free
+// so it is unit-testable; the persisted timestamp lives in pos.pending_chart_exit_since.
+export function chartExitDebounceDecision({ pendingSince, signalActive, nowMs, maxAgeMs }) {
+  if (!signalActive) return { close: false, nextPendingSince: null };
+  const fresh = pendingSince != null && nowMs - pendingSince <= maxAgeMs;
+  if (fresh) return { close: true, nextPendingSince: null };
+  // First detection, or a stale pending (e.g. after a long pause) — (re)arm at now.
+  return { close: false, nextPendingSince: nowMs };
+}
+
+// Advance the per-position chart-exit debounce by one cycle and persist the result.
+// Returns true only when the signal is confirmed (close now).
+export function confirmChartExitDebounce(position_address, signalActive, maxAgeMs = 35 * 60_000) {
+  const state = load();
+  const pos = state.positions[position_address];
+  if (!pos || pos.closed) return false;
+
+  const { close, nextPendingSince } = chartExitDebounceDecision({
+    pendingSince: pos.pending_chart_exit_since ? new Date(pos.pending_chart_exit_since).getTime() : null,
+    signalActive,
+    nowMs: Date.now(),
+    maxAgeMs,
+  });
+
+  const next = nextPendingSince == null ? null : new Date(nextPendingSince).toISOString();
+  if (pos.pending_chart_exit_since !== next) {
+    pos.pending_chart_exit_since = next;
+    save(state);
+    if (signalActive && next) log("state", `Position ${position_address} chart-exit armed; awaiting confirmation next cycle`);
+  }
+  return close;
 }
 
 /**

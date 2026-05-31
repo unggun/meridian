@@ -213,6 +213,18 @@ The supertrend seed direction is intentionally derived from price vs HL2 on the 
 (not assumed bullish); this is a deliberate divergence from stock TradingView seeding. Validate
 decision-level parity before flipping: `node scripts/validate-gmgn-indicators.js [<mint>...]`.
 
+**Stability (resampling is non-repainting and window-anchored).** `resampleKlines` buckets 1m candles
+by wall-clock boundary (`floor(time / N·60s)`), NOT array index — a sliding 1m fetch window no longer
+re-phases the resampled series each refresh. `fetchGmgnIndicatorPayload` then (a) drops the in-progress
+period (`dropInProgress`) so indicators evaluate on the last CLOSED bar, and (b) anchors to the last
+`indicatorParams.warmupBars` (default 50) closed bars so the supertrend seed advances only when a bar
+actually closes — not on every fetch. Before this, the same instant's 15m supertrend could read bullish
+or bearish depending only on where the 900-kline window started (CUM-SOL 2026-05-31: entry gate saw
+bullish, exit gate saw bearish 9 min later → insta-close). Decision: stability over recency (up to one
+interval of lag). As a second guard, chart-exit closes are **debounced** in index.js via
+`confirmChartExitDebounce` (state.js): a bearish signal must persist across two consecutive management
+cycles (`pending_chart_exit_since`) before closing, so a single artifact can't cut a fresh position.
+
 ---
 
 ## Model Configuration

@@ -4,28 +4,49 @@ import { gmgnFetch } from "./gmgn-client.js";   // leaf client — NOT gmgn.js (
 // Compute chart indicators from GMGN klines, matching the payload shape that
 // tools/chart-indicators.js consumers expect. Pure functions + one cached fetch.
 
-// Bucket ascending-by-time 1-minute OHLCV candles into N-minute candles.
-// Bucketing is by index (every `targetMinutes` candles), assuming contiguous 1m data.
-// A trailing partial bucket (the in-progress candle window) is kept so the latest
-// value reflects current price action.
-export function resampleKlines(klines1m, targetMinutes) {
+// Bucket ascending-by-time 1-minute OHLCV candles into N-minute candles, anchored to
+// wall-clock boundaries (bucketStart = floor(time / N·60s) · N·60s) rather than array
+// index. Clock alignment makes a given wall-clock period always group the same minutes,
+// so a sliding 1m window no longer re-phases the resampled series on every refresh — the
+// trailing CLOSED buckets are invariant to where the window happens to start. Each output
+// candle's `time` is the aligned bucket start. Gaps are handled naturally (each minute
+// lands in its own clock bucket).
+//
+// `dropInProgress`: drop the latest (highest-start) bucket — the still-forming current
+// period — so the supertrend/RSI/Bollinger decision is taken on the last CLOSED bar and
+// does not repaint as new 1m candles arrive within the period.
+export function resampleKlines(klines1m, targetMinutes, { dropInProgress = false } = {}) {
   if (!Array.isArray(klines1m) || klines1m.length === 0) return [];
-  const size = Math.max(1, Math.floor(targetMinutes));
-  const out = [];
-  // NOTE: index-based bucketing assumes contiguous, gap-free 1m candles; a missing
-  // minute would shift later candles into the wrong bucket.
-  for (let i = 0; i < klines1m.length; i += size) {
-    const bucket = klines1m.slice(i, i + size);
-    if (bucket.length === 0) continue;
-    out.push({
-      time: bucket[0].time,
-      open: bucket[0].open,
-      close: bucket[bucket.length - 1].close,
-      high: Math.max(...bucket.map((k) => k.high)),
-      low: Math.min(...bucket.map((k) => k.low)),
-      volume: bucket.reduce((sum, k) => sum + (Number(k.volume) || 0), 0),
-    });
+  const widthMs = Math.max(1, Math.floor(targetMinutes)) * 60_000;
+  const buckets = new Map(); // bucketStart → aggregate
+  for (const k of klines1m) {
+    const t = Number(k.time);
+    if (!Number.isFinite(t)) continue;
+    const start = Math.floor(t / widthMs) * widthMs;
+    const b = buckets.get(start);
+    if (!b) {
+      buckets.set(start, {
+        time: start,
+        firstTime: t,
+        lastTime: t,
+        open: k.open,
+        close: k.close,
+        high: k.high,
+        low: k.low,
+        volume: Number(k.volume) || 0,
+      });
+    } else {
+      if (t < b.firstTime) { b.firstTime = t; b.open = k.open; }
+      if (t >= b.lastTime) { b.lastTime = t; b.close = k.close; }
+      if (k.high > b.high) b.high = k.high;
+      if (k.low < b.low) b.low = k.low;
+      b.volume += Number(k.volume) || 0;
+    }
   }
+  const out = [...buckets.values()]
+    .sort((a, b) => a.time - b.time)
+    .map(({ firstTime, lastTime, ...candle }) => candle);
+  if (dropInProgress && out.length > 0) out.pop(); // latest period is still forming
   return out;
 }
 
@@ -214,6 +235,13 @@ export const DEFAULT_INDICATOR_PARAMS = {
   // BB-20 / ST-10 windows. 300 (≈20×15m) starved 15m and made it disagree with the
   // Meridian feed. GMGN honors limits well above 300 in a single call.
   klineLimit: 900,
+  // Anchor the indicator window to a FIXED number of most-recent CLOSED resampled bars.
+  // The 1m fetch is a sliding window, so without this the oldest bar (and thus the
+  // supertrend seed) moved every refresh and could flip direction at the same instant.
+  // Pinning to the last N closed buckets makes the seed advance only when a bar actually
+  // closes — one controlled step, never per-fetch jitter. Must exceed BB-20 / ST-10 and
+  // stay below the coarsest interval's available closed bars (15m: ~59 from a 900 window).
+  warmupBars: 50,
 };
 
 function indicatorParams() {
@@ -272,7 +300,11 @@ export async function fetchGmgnIndicatorPayload(mint, { interval, rsiLength } = 
   if (!Array.isArray(klines1m) || klines1m.length === 0) {
     throw new Error("GMGN returned empty kline list");
   }
-  const resampled = resampleKlines(klines1m, minutes);
   const params = { ...indicatorParams(), rsiLength: Number(rsiLength) || 2 };
-  return computeIndicators(resampled, params);
+  // Clock-aligned, in-progress bar excluded → decision taken on the last CLOSED bar.
+  const closed = resampleKlines(klines1m, minutes, { dropInProgress: true });
+  // Anchor to the last N closed bars so the supertrend seed is stable across fetches.
+  const warmupBars = Math.max(params.bollingerPeriod, params.supertrendPeriod) + 1;
+  const window = closed.slice(-Math.max(warmupBars, Number(params.warmupBars) || 0));
+  return computeIndicators(window, params);
 }

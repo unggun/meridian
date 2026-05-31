@@ -5,9 +5,12 @@ import { resampleKlines } from "./gmgn-indicators.js";
 // Helper: build a 1m candle. time in ms.
 const c = (time, open, high, low, close, volume) => ({ time, open, high, low, close, volume });
 
+const min = 60_000;
+const ALIGNED_5M = 1_700_000_400_000;  // divisible by 5min  (300_000ms): a clock boundary
+const ALIGNED_15M = 1_700_000_100_000; // divisible by 15min (900_000ms): a clock boundary
+
 test("resampleKlines buckets five 1m candles into one 5m candle", () => {
-  const base = 1_700_000_000_000; // arbitrary ms aligned to a 5m boundary for the test
-  const min = 60_000;
+  const base = ALIGNED_5M;
   const ones = [
     c(base + 0 * min, 10, 12, 9, 11, 100),
     c(base + 1 * min, 11, 15, 10, 14, 200),
@@ -17,6 +20,7 @@ test("resampleKlines buckets five 1m candles into one 5m candle", () => {
   ];
   const out = resampleKlines(ones, 5);
   assert.equal(out.length, 1);
+  assert.equal(out[0].time, base); // emits the aligned bucket-start, not the first candle's time
   assert.equal(out[0].open, 10);   // first candle's open
   assert.equal(out[0].close, 12);  // last candle's close
   assert.equal(out[0].high, 15);   // max high
@@ -24,16 +28,60 @@ test("resampleKlines buckets five 1m candles into one 5m candle", () => {
   assert.equal(out[0].volume, 800); // sum
 });
 
-test("resampleKlines drops an incomplete trailing bucket only if it has zero candles", () => {
-  const base = 1_700_000_000_000;
-  const min = 60_000;
-  // 7 one-minute candles → one full 5m bucket + a partial (2-candle) bucket which we KEEP
+test("resampleKlines keeps a partial trailing clock bucket when dropInProgress is off", () => {
+  const base = ALIGNED_5M;
+  // 7 one-minute candles → full 5m bucket [base, base+5m) + partial bucket [base+5m, base+10m)
   const ones = Array.from({ length: 7 }, (_, i) =>
     c(base + i * min, 10 + i, 20, 5, 10 + i, 10));
   const out = resampleKlines(ones, 5);
   assert.equal(out.length, 2);          // full bucket + partial bucket kept
   assert.equal(out[1].open, 15);        // 6th candle (index 5) opens the partial bucket
   assert.equal(out[1].volume, 20);      // two candles summed
+});
+
+test("resampleKlines groups by wall-clock boundary, not by array index", () => {
+  const base = ALIGNED_5M;
+  // Series STARTS mid-bucket at base+2min. Index bucketing would lump the first
+  // five (base+2..base+6) into one bucket; clock bucketing splits at base+5min.
+  const ones = [
+    c(base + 2 * min, 1, 1, 1, 1, 1), // bucket [base, base+5m)
+    c(base + 3 * min, 1, 1, 1, 1, 1),
+    c(base + 4 * min, 1, 1, 1, 1, 1),
+    c(base + 5 * min, 2, 2, 2, 2, 1), // bucket [base+5m, base+10m)
+    c(base + 6 * min, 2, 2, 2, 2, 1),
+  ];
+  const out = resampleKlines(ones, 5);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].time, base);            // first bucket aligned to base
+  assert.equal(out[0].volume, 3);             // three candles
+  assert.equal(out[1].time, base + 5 * min);  // second bucket aligned to base+5m
+  assert.equal(out[1].volume, 2);
+});
+
+test("resampleKlines trailing closed buckets are invariant to where the window starts", () => {
+  // The production bug: a sliding 1m window re-phased index buckets so every refresh
+  // changed all 15m candles. Clock alignment must make the trailing CLOSED buckets
+  // identical whether or not earlier candles are present.
+  const base = ALIGNED_15M;
+  const full = Array.from({ length: 120 }, (_, i) =>
+    c(base + i * min, 100 + i, 105 + i, 95 + i, 100 + i, 7));
+  const a = resampleKlines(full, 15, { dropInProgress: true });
+  const b = resampleKlines(full.slice(9), 15, { dropInProgress: true }); // window slid 9 minutes
+  // The last 3 closed buckets are fully covered in both windows (only b's earliest bucket
+  // is partial after the slide), so they must be byte-identical.
+  assert.deepEqual(b.slice(-3), a.slice(-3), "trailing closed buckets must match across a window slide");
+});
+
+test("resampleKlines dropInProgress excludes the current (latest) period bucket", () => {
+  const base = ALIGNED_15M;
+  // 15 candles fill [base, base+15m); 3 more open the in-progress [base+15m, base+30m).
+  const ones = Array.from({ length: 18 }, (_, i) =>
+    c(base + i * min, 10, 12, 9, 11, 1));
+  const kept = resampleKlines(ones, 15, { dropInProgress: true });
+  const all = resampleKlines(ones, 15);
+  assert.equal(all.length, 2, "both periods present without dropInProgress");
+  assert.equal(kept.length, 1, "in-progress latest period dropped");
+  assert.equal(kept[0].time, base, "only the closed [base, base+15m) bucket remains");
 });
 
 test("resampleKlines returns [] for empty input", () => {
@@ -181,6 +229,43 @@ test("fetchGmgnIndicatorPayload reuses one fetch for 5m and 15m within TTL", asy
   assert.ok(five.latest.supertrend.value > 0);
   assert.ok(fifteen.latest.supertrend.value > 0);
   __setKlineFetcherForTest(null); // restore real fetcher
+});
+
+test("fetchGmgnIndicatorPayload supertrend direction is invariant to where the sliding window starts", async () => {
+  // Reproduces the production bug: with a sliding 1m window, prepending/dropping leading
+  // candles changed the 15m supertrend direction at the SAME latest bar (entry saw bullish,
+  // the exit check minutes later saw bearish). Anchoring the warmup to a fixed set of closed
+  // clock buckets must make direction depend only on the recent closed price, not the window
+  // start. This series (range-bound chop) flips direction under the old index/full-series path.
+  __clearKlineCacheForTest();
+  const ALIGNED = 1_700_000_100_000; // 15m boundary
+  const series = (n) => Array.from({ length: n }, (_, i) => {
+    const p = 100 + Math.sin(i / 11) * 2 + Math.sin(i / 3.3) * 0.8;
+    return {
+      time: ALIGNED + i * 60_000,
+      open: p,
+      high: p + Math.abs(Math.sin(i / 2)) * 0.4,
+      low: p - Math.abs(Math.cos(i / 2)) * 0.4,
+      close: p,
+      volume: 1,
+    };
+  });
+  const full = series(1100); // ends on the same latest candle for every slice below
+  const dir = async (klines) => {
+    __clearKlineCacheForTest();
+    __setKlineFetcherForTest(async () => klines);
+    const pl = await fetchGmgnIndicatorPayload("MINV", { interval: "15_MINUTE", rsiLength: 2 });
+    return pl.latest.supertrend.direction;
+  };
+  const base = await dir(full);
+  for (const k of [15, 30, 45, 60, 90]) {
+    assert.equal(
+      await dir(full.slice(k)),
+      base,
+      `direction must not change when the window starts ${k} minutes later`,
+    );
+  }
+  __setKlineFetcherForTest(null);
 });
 
 test("fetchGmgnIndicatorPayload throws when the feed returns too few candles", async () => {

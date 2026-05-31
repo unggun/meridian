@@ -27,7 +27,7 @@ import {
   createLiveMessage,
 } from "./telegram.js";
 import { generateBriefing } from "./briefing.js";
-import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, getTrackedPositions, setPositionInstruction, updatePnlAndCheckExits, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop, queuePendingTakeProfit, resolvePendingTakeProfit } from "./state.js";
+import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, getTrackedPositions, setPositionInstruction, updatePnlAndCheckExits, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop, queuePendingTakeProfit, resolvePendingTakeProfit, confirmChartExitDebounce } from "./state.js";
 import { getActiveStrategy } from "./strategy-library.js";
 import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
@@ -367,10 +367,23 @@ export async function runManagementCycle({ silent = false } = {}) {
         actionMap.set(p.position, { action: "CLOSE", rule: "exit", reason: exitMap.get(p.position) });
         continue;
       }
-      // Chart indicator exit — fires only when position is underwater
-      if (indicatorExitMap.has(p.position)) {
-        actionMap.set(p.position, { action: "CLOSE", rule: "chart_exit", reason: indicatorExitMap.get(p.position) });
-        continue;
+      // Chart indicator exit — debounced: a bearish chart signal must persist across two
+      // consecutive cycles before it closes, so a single unstable indicator read can't cut
+      // a fresh position. The first detection only arms; the next cycle confirms.
+      {
+        const signalActive = indicatorExitMap.has(p.position);
+        const confirmed = confirmChartExitDebounce(
+          p.position,
+          signalActive,
+          Math.max(1, config.schedule.managementIntervalMin) * 60_000 * 3,
+        );
+        if (signalActive && confirmed) {
+          actionMap.set(p.position, { action: "CLOSE", rule: "chart_exit", reason: indicatorExitMap.get(p.position) });
+          continue;
+        }
+        if (signalActive) {
+          log("state", `Chart-exit for ${p.pair} armed; deferring close until next cycle confirms`);
+        }
       }
       // Instruction-set — pass to LLM, can't parse in JS
       if (p.instruction) {

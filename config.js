@@ -18,7 +18,7 @@ function readJsonIfExists(filePath) {
 
 const u = readJsonIfExists(USER_CONFIG_PATH);
 const gmgnUserConfig = readJsonIfExists(GMGN_CONFIG_PATH);
-export const MIN_SAFE_BINS_BELOW = 35;
+export const MIN_SAFE_BINS_BELOW = 16;
 
 function numericConfig(value) {
   const n = Number(value);
@@ -84,6 +84,8 @@ export const config = {
     excludeHighSupplyConcentration: u.excludeHighSupplyConcentration ?? true,
     minFeeActiveTvlRatio: u.minFeeActiveTvlRatio ?? 0.05,
     maxFeeActiveTvlRatio: u.maxFeeActiveTvlRatio ?? null,
+    minFeeTvlRatio24h: u.minFeeTvlRatio24h ?? null, // 24h fee/TOTAL-tvl floor (%), null = off. "won't cover IL below ~20%"
+    fee24hGateLogOnly: u.fee24hGateLogOnly ?? false, // true = log would-drop pools but don't filter
     minTvl:            u.minTvl            ?? 10_000,
     maxTvl:            u.maxTvl !== undefined ? u.maxTvl : 150_000,
     minVolume:         u.minVolume         ?? 500,
@@ -153,7 +155,30 @@ export const config = {
     preferredKolNames: gmgnArray("preferredKolNames", "gmgnPreferredKolNames", []),
     dumpKolNames: gmgnArray("dumpKolNames", "gmgnDumpKolNames", []),
     indicatorFilter: gmgnValue("indicatorFilter", "gmgnIndicatorFilter", true),
+    // Indicator candle source: "meridian" (default, existing endpoint) | "gmgn" (compute
+    // from GMGN klines, auto-falling back to meridian on any failure).
+    indicatorSource: gmgnValue("indicatorSource", "gmgnIndicatorSource", "meridian"),
+    indicatorParams: {
+      supertrendPeriod: 10,
+      supertrendMultiplier: 3,
+      bollingerPeriod: 20,
+      bollingerStdDev: 2,
+      fibLookbackBars: 55,
+      klineCacheTtlSec: 30,
+      ...(gmgnUserConfig.indicatorParams || {}),
+    },
     indicatorInterval: gmgnValue("indicatorInterval", "gmgnIndicatorInterval", "15_MINUTE"),
+    // Multi-timeframe bounce confirmation. Backend accepts only 5_MINUTE/15_MINUTE,
+    // one per request — checkBounceSetup() loops these client-side. Defaults to the
+    // single legacy `indicatorInterval` so behaviour is unchanged unless set.
+    indicatorIntervals: gmgnArray("indicatorIntervals", "gmgnIndicatorIntervals", [
+      gmgnValue("indicatorInterval", "gmgnIndicatorInterval", "15_MINUTE"),
+    ]),
+    requireAllIndicatorIntervals: gmgnValue(
+      "requireAllIndicatorIntervals",
+      "gmgnRequireAllIndicatorIntervals",
+      true,
+    ),
     indicatorRules: (() => {
       const r = gmgnUserConfig.indicatorRules || {};
       return {
@@ -296,6 +321,12 @@ export const config = {
     rsiOverbought: indicatorUserConfig.rsiOverbought ?? 80,
     maxEntryRsi: indicatorUserConfig.maxEntryRsi ?? null,
     requireAllIntervals: indicatorUserConfig.requireAllIntervals ?? false,
+    // Independent trend-breakdown exit. Fires whenever the configured interval's
+    // supertrend flips bearish (or price sits below a bearish supertrend),
+    // regardless of PnL and regardless of the `enabled`/exitPreset chart-exit
+    // above. Backend intervals: 5_MINUTE or 15_MINUTE only.
+    supertrendExitEnabled: indicatorUserConfig.supertrendExitEnabled ?? false,
+    supertrendExitInterval: String(indicatorUserConfig.supertrendExitInterval ?? "15_MINUTE").trim().toUpperCase(),
   },
 };
 

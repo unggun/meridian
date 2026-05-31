@@ -307,10 +307,17 @@ async function pickBestPool(pools, timeframe = MIN_VOLATILITY_TIMEFRAME) {
     if (refetched) volatilityDetail = refetched;
   }
 
-  return { pool: chosenPool, detail: chosenDetail, volatilityDetail, volatilityTimeframe };
+  const detail24h = chosenPool
+    ? await fetchPoolDetailDirect(chosenPool.address || chosenPool.pool_address, "24h").catch(() => null)
+    : null;
+  const feeTvlRatio24h = Number.isFinite(Number(detail24h?.fee_tvl_ratio))
+    ? Number(Number(detail24h.fee_tvl_ratio).toFixed(2))
+    : null;
+
+  return { pool: chosenPool, detail: chosenDetail, volatilityDetail, volatilityTimeframe, feeTvlRatio24h };
 }
 
-function condenseGmgnCandidate({ token, pool, poolDetail, volatilityDetail = poolDetail, volatilityTimeframe = MIN_VOLATILITY_TIMEFRAME, security, info, infoAnalysis, holdersAnalysis, indicatorSignal }) {
+function condenseGmgnCandidate({ token, pool, poolDetail, volatilityDetail = poolDetail, volatilityTimeframe = MIN_VOLATILITY_TIMEFRAME, security, info, infoAnalysis, holdersAnalysis, indicatorSignal, feeTvlRatio24h = null }) {
   const poolAddress = pool.address || pool.pool_address;
   // Stage 5 Pool Discovery provides active_tvl and fee_active_tvl_ratio
   // Stage 3 Meteora search provides tvl and bin_step/base_fee_pct via pool_config
@@ -352,6 +359,7 @@ function condenseGmgnCandidate({ token, pool, poolDetail, volatilityDetail = poo
     tvl: round(tvl),
     active_tvl: round(activeTvl),
     fee_active_tvl_ratio: feeActiveTvlRatio,
+    fee_tvl_ratio_24h: feeTvlRatio24h,
     volatility: volatilityDetail?.volatility != null ? Number(Number(volatilityDetail.volatility).toFixed(4)) : null,
     volatility_timeframe: volatilityTimeframe,
     // Stage 1 GMGN rank: token-level metrics
@@ -636,13 +644,13 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
     if (pools.length >= limit) break;
     const mint = token.address;
     try {
-      const { pool, detail: poolDetail, volatilityDetail, volatilityTimeframe } = await pickBestPool(topPools, config.screening.timeframe);
+      const { pool, detail: poolDetail, volatilityDetail, volatilityTimeframe, feeTvlRatio24h } = await pickBestPool(topPools, config.screening.timeframe);
       if (!pool) {
         filtered.push({ stage: 5, name: token.symbol || mint, reason: "pool selection failed" });
         continue;
       }
       const security = {};
-      const candidate = condenseGmgnCandidate({ token, pool, poolDetail, volatilityDetail, volatilityTimeframe, security, info, infoAnalysis: infoCheck, holdersAnalysis: holdersCheck, indicatorSignal });
+      const candidate = condenseGmgnCandidate({ token, pool, poolDetail, volatilityDetail, volatilityTimeframe, security, info, infoAnalysis: infoCheck, holdersAnalysis: holdersCheck, indicatorSignal, feeTvlRatio24h });
       if (!candidate.pool || !candidate.base?.mint) {
         filtered.push({ stage: 5, name: token.symbol || mint, reason: "incomplete pool mapping" });
         continue;

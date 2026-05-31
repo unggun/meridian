@@ -641,6 +641,52 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     .sort((a, b) => scoreCandidate(b) - scoreCandidate(a))
     .slice(0, limit);
 
+  // 24h fee/TOTAL-TVL gate — the "won't cover IL below ~20%" rule. Our other fee/TVL
+  // numbers are windowed (timeframe) and over ACTIVE tvl; this is the Meteora-UI "24H Fee/TVL".
+  // Not on the candidates yet, so fetch 24h detail per shortlisted pool and stamp it.
+  const minFeeTvl24h = config.screening.minFeeTvlRatio24h;
+  let fee24hGate = null;
+  if (minFeeTvl24h != null && eligible.length > 0) {
+    const logOnly = config.screening.fee24hGateLogOnly === true;
+    const wouldDrop = []; // pools below the floor (dropped, or would-be-dropped in log-only)
+    // Prefer a value already stamped upstream (GMGN pickBestPool); only fetch for
+    // candidates that lack it (e.g. the Meteora source path).
+    const needFetch = eligible.filter((p) => p.fee_tvl_ratio_24h == null);
+    const fetched = await Promise.allSettled(
+      needFetch.map((p) => fetchPoolDiscoveryDetail({ poolAddress: p.pool, timeframe: "24h" })),
+    );
+    for (let i = 0; i < needFetch.length; i++) {
+      const r = fetched[i];
+      const ratio = r.status === "fulfilled" ? numeric(r.value?.fee_tvl_ratio) : null;
+      needFetch[i].fee_tvl_ratio_24h = ratio != null ? Number(ratio.toFixed(2)) : null;
+    }
+    const before = eligible.length;
+    const kept = eligible.filter((p) => {
+      const ratio = p.fee_tvl_ratio_24h;
+      if (ratio == null) {
+        // No data → keep, but log so a NaN feed never silently bypasses the gate.
+        log("screening", `24h fee/TVL gate: ${p.name} — no 24h fee_tvl_ratio data, keeping`);
+        return true;
+      }
+      if (ratio < minFeeTvl24h) {
+        wouldDrop.push({ name: p.name, ratio });
+        if (logOnly) {
+          log("screening", `24h fee/TVL gate (log-only): WOULD drop ${p.name} — ${ratio}% < ${minFeeTvl24h}%`);
+          return true;
+        }
+        log("screening", `24h fee/TVL gate: dropped ${p.name} — ${ratio}% < ${minFeeTvl24h}%`);
+        pushFilteredReason(filteredOut, p, `24h fee/TVL ${ratio}% below ${minFeeTvl24h}%`);
+        return false;
+      }
+      return true;
+    });
+    eligible.splice(0, eligible.length, ...kept);
+    if (!logOnly && eligible.length < before) {
+      log("screening", `24h fee/TVL gate removed ${before - eligible.length} pool(s)`);
+    }
+    fee24hGate = { floor: minFeeTvl24h, logOnly, evaluated: before, wouldDrop };
+  }
+
   if (config.screening.avoidPvpSymbols && eligible.length > 0) {
     await enrichPvpRisk(eligible);
     if (config.screening.blockPvpSymbols) {
@@ -817,6 +863,7 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     filtered_examples: filteredOut.slice(0, 3),
     stage_counts: discovery.stage_counts ? { ranked: discovery.total, ...discovery.stage_counts } : null,
     all_filtered: filteredOut,
+    fee24h_gate: fee24hGate,
   };
 }
 

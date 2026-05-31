@@ -200,7 +200,6 @@ export function computeIndicators(candles, params) {
 }
 
 const INTERVAL_MINUTES = { "5_MINUTE": 5, "15_MINUTE": 15 };
-const KLINE_LIMIT = 300; // 298 warmup + headroom
 
 // Default indicator params; overridden by config.gmgn.indicatorParams.
 export const DEFAULT_INDICATOR_PARAMS = {
@@ -210,6 +209,11 @@ export const DEFAULT_INDICATOR_PARAMS = {
   bollingerStdDev: 2,
   fibLookbackBars: 55,
   klineCacheTtlSec: 30,
+  // How many 1m candles to fetch per mint. Must give the COARSEST interval enough
+  // warmup after resampling: 900 → 60×15m bars (and 180×5m), comfortably above the
+  // BB-20 / ST-10 windows. 300 (≈20×15m) starved 15m and made it disagree with the
+  // Meridian feed. GMGN honors limits well above 300 in a single call.
+  klineLimit: 900,
 };
 
 function indicatorParams() {
@@ -225,8 +229,9 @@ export function __setKlineFetcherForTest(fn) { klineFetcher = fn; }
 export function __clearKlineCacheForTest() { klineCache.clear(); }
 
 async function realFetch1mKlines(mint) {
+  const limit = Math.max(300, Number(indicatorParams().klineLimit) || 900);
   const payload = await gmgnFetch("/v1/market/token_kline", {
-    params: { chain: "sol", address: mint, resolution: "1m", limit: KLINE_LIMIT },
+    params: { chain: "sol", address: mint, resolution: "1m", limit },
   });
   const list =
     payload?.data?.list ?? payload?.list ?? payload?.data ?? [];

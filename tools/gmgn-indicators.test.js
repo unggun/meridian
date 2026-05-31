@@ -78,3 +78,26 @@ test("computeBollinger bands straddle the mean symmetrically", () => {
 test("computeBollinger returns null when not enough data", () => {
   assert.equal(computeBollinger([1, 2, 3], 20, 2), null);
 });
+import { computeSupertrend } from "./gmgn-indicators.js";
+
+const ohlc = (high, low, close) => ({ high, low, close, open: close });
+
+test("computeSupertrend reports bullish on a sustained uptrend", () => {
+  const candles = [];
+  for (let i = 0; i < 30; i++) candles.push(ohlc(10 + i + 1, 10 + i - 1, 10 + i));
+  const st = computeSupertrend(candles, 10, 3);
+  assert.equal(st.direction, "bullish");
+  assert.ok(st.value < candles[candles.length - 1].close, "supertrend sits below price in uptrend");
+});
+
+test("computeSupertrend reports bearish on a sustained downtrend", () => {
+  const candles = [];
+  for (let i = 0; i < 30; i++) candles.push(ohlc(100 - i + 1, 100 - i - 1, 100 - i));
+  const st = computeSupertrend(candles, 10, 3);
+  assert.equal(st.direction, "bearish");
+  assert.ok(st.value > candles[candles.length - 1].close, "supertrend sits above price in downtrend");
+});
+
+test("computeSupertrend returns null when not enough data", () => {
+  assert.equal(computeSupertrend([ohlc(1, 1, 1)], 10, 3), null);
+});

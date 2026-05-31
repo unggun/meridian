@@ -64,3 +64,74 @@ export function computeBollinger(closes, period = 20, stdDevMult = 2) {
     lower: mean - stdDevMult * sd,
   };
 }
+
+// ATR-based Supertrend over OHLC candles (ascending by time).
+// Returns { value, direction, breakUp, breakDown } for the final candle, or null.
+// direction: "bullish" | "bearish". breakUp/breakDown = direction flipped on the
+// final candle relative to the prior one.
+export function computeSupertrend(candles, period = 10, multiplier = 3) {
+  if (!Array.isArray(candles) || candles.length < period + 1) return null;
+
+  // True Range series.
+  const tr = [];
+  for (let i = 0; i < candles.length; i++) {
+    const cur = candles[i];
+    if (i === 0) {
+      tr.push(cur.high - cur.low);
+      continue;
+    }
+    const prevClose = candles[i - 1].close;
+    tr.push(Math.max(
+      cur.high - cur.low,
+      Math.abs(cur.high - prevClose),
+      Math.abs(cur.low - prevClose),
+    ));
+  }
+
+  // Wilder ATR.
+  const atr = new Array(candles.length).fill(null);
+  let seed = 0;
+  for (let i = 0; i < period; i++) seed += tr[i];
+  atr[period - 1] = seed / period;
+  for (let i = period; i < candles.length; i++) {
+    atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period;
+  }
+
+  // Supertrend bands + direction.
+  let direction = "bullish"; // 1 = bullish (uptrend), tracked as string at the end
+  let dirNum = 1;
+  let prevDirNum = 1;
+  let finalUpper = null;
+  let finalLower = null;
+  let supertrend = null;
+
+  for (let i = period - 1; i < candles.length; i++) {
+    const mid = (candles[i].high + candles[i].low) / 2;
+    const basicUpper = mid + multiplier * atr[i];
+    const basicLower = mid - multiplier * atr[i];
+    const close = candles[i].close;
+    const prevClose = candles[i - 1].close;
+
+    finalUpper = (finalUpper == null || prevClose > finalUpper)
+      ? basicUpper
+      : Math.min(basicUpper, finalUpper);
+    finalLower = (finalLower == null || prevClose < finalLower)
+      ? basicLower
+      : Math.max(basicLower, finalLower);
+
+    prevDirNum = dirNum;
+    if (close > finalUpper) dirNum = 1;
+    else if (close < finalLower) dirNum = -1;
+    // else: direction unchanged
+
+    supertrend = dirNum === 1 ? finalLower : finalUpper;
+    direction = dirNum === 1 ? "bullish" : "bearish";
+  }
+
+  return {
+    value: supertrend,
+    direction,
+    breakUp: prevDirNum === -1 && dirNum === 1,
+    breakDown: prevDirNum === 1 && dirNum === -1,
+  };
+}

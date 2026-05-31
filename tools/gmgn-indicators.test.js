@@ -56,3 +56,25 @@ test("computeRsi returns 0 for a strictly falling close series", () => {
 test("computeRsi returns null when not enough data", () => {
   assert.equal(computeRsi([1, 2], 2), null);
 });
+import { computeBollinger } from "./gmgn-indicators.js";
+
+test("computeBollinger on a flat series has zero-width bands at the mean", () => {
+  const closes = Array.from({ length: 20 }, () => 100);
+  const bb = computeBollinger(closes, 20, 2);
+  assert.equal(bb.middle, 100);
+  assert.equal(bb.upper, 100);
+  assert.equal(bb.lower, 100);
+});
+
+test("computeBollinger bands straddle the mean symmetrically", () => {
+  const closes = [];
+  for (let i = 0; i < 20; i++) closes.push(i % 2 === 0 ? 90 : 110); // mean 100
+  const bb = computeBollinger(closes, 20, 2);
+  assert.equal(bb.middle, 100);
+  assert.ok(bb.upper > 100 && bb.lower < 100);
+  assert.ok(Math.abs((bb.upper - 100) - (100 - bb.lower)) < 1e-9);
+});
+
+test("computeBollinger returns null when not enough data", () => {
+  assert.equal(computeBollinger([1, 2, 3], 20, 2), null);
+});

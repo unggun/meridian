@@ -50,3 +50,17 @@ export function computeRsi(closes, length = 2) {
   const rs = avgGain / avgLoss;
   return 100 - 100 / (1 + rs);
 }
+
+// Bollinger Bands for the final candle. Population stddev. Null if insufficient data.
+export function computeBollinger(closes, period = 20, stdDevMult = 2) {
+  if (!Array.isArray(closes) || closes.length < period) return null;
+  const window = closes.slice(-period);
+  const mean = window.reduce((sum, v) => sum + v, 0) / period;
+  const variance = window.reduce((sum, v) => sum + (v - mean) ** 2, 0) / period;
+  const sd = Math.sqrt(variance);
+  return {
+    middle: mean,
+    upper: mean + stdDevMult * sd,
+    lower: mean - stdDevMult * sd,
+  };
+}

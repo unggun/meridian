@@ -282,29 +282,44 @@ export const DEFAULT_INDICATOR_PARAMS = {
   // a window of closed bars (a durable signal, vs a single-bar event that the 30-min
   // screener would usually miss). Keep >= the largest expected extensionLookbackBars.
   recentSeriesBars: 16,
+  // Intervals (e.g. "15_MINUTE") to fetch at NATIVE resolution instead of resampling the
+  // 1m feed. The 1m feed hard-caps at ~1000 candles → only ~66 closed 15m bars (~17h),
+  // below the ~100-bar history the path-dependent supertrend needs to carry the last
+  // trend-defining band cross on slower tokens. Native N-minute candles reach days of
+  // history, so the supertrend matches the GMGN chart instead of reporting the seed's
+  // guess. Default OFF (empty) so the single-fetch 1m→5m/15m optimization and the legacy
+  // resample path are unchanged unless explicitly enabled in gmgn-config.json. Costs one
+  // extra GMGN call per native interval per mint per cycle.
+  nativeFetchIntervals: [],
+  // Fixed anchor (most-recent CLOSED native bars) for the native path. Mirrors warmupBars'
+  // role but sized for native depth: >= ~100 clears the supertrend seed-flap zone. Native
+  // 15m yields ~137 bars, so 120 anchors safely past convergence while staying deterministic
+  // (advances exactly one bar per close). See scripts/sweep-warmup-parity.js.
+  nativeWarmupBars: 120,
+  // Candles to request at native resolution. GMGN serves ~137 closed 15m bars (~34h).
+  nativeKlineLimit: 300,
 };
 
 function indicatorParams() {
   return { ...DEFAULT_INDICATOR_PARAMS, ...(config.gmgn?.indicatorParams || {}) };
 }
 
-// Per-mint 1m-kline cache: Map<mint, { klines, ts }>. In-memory, TTL-bounded, no disk.
+// Kline cache, keyed by resolution: Map<`${mint}` | `${mint}|${resolution}`, { klines, ts }>.
+// In-memory, TTL-bounded, no disk. 1m uses the bare mint key (back-compat); native fetches
+// are namespaced by resolution so they don't collide with the 1m series.
 const klineCache = new Map();
 
-// Injectable fetcher for tests. When null, the real GMGN fetch is used.
-let klineFetcher = null;
+// Injectable fetchers for tests. When null, the real GMGN fetch is used.
+let klineFetcher = null;        // 1m series
+let nativeKlineFetcher = null;  // native-resolution series, (mint, resolution, limit) => candles
 export function __setKlineFetcherForTest(fn) { klineFetcher = fn; }
+export function __setNativeKlineFetcherForTest(fn) { nativeKlineFetcher = fn; }
 export function __clearKlineCacheForTest() { klineCache.clear(); }
 
-async function realFetch1mKlines(mint) {
-  const limit = Math.max(300, Number(indicatorParams().klineLimit) || 900);
-  const payload = await gmgnFetch("/v1/market/token_kline", {
-    params: { chain: "sol", address: mint, resolution: "1m", limit },
-  });
-  const list =
-    payload?.data?.list ?? payload?.list ?? payload?.data ?? [];
+// Normalize a GMGN token_kline response to ascending-by-time numeric OHLCV candles.
+function normalizeKlines(payload) {
+  const list = payload?.data?.list ?? payload?.list ?? payload?.data ?? [];
   if (!Array.isArray(list)) return [];
-  // Normalize to numbers, ascending by time.
   return list
     .map((k) => ({
       time: Number(k.time),
@@ -318,29 +333,73 @@ async function realFetch1mKlines(mint) {
     .sort((a, b) => a.time - b.time);
 }
 
-async function getCached1mKlines(mint) {
+async function realFetch1mKlines(mint) {
+  const limit = Math.max(300, Number(indicatorParams().klineLimit) || 900);
+  return normalizeKlines(await gmgnFetch("/v1/market/token_kline", {
+    params: { chain: "sol", address: mint, resolution: "1m", limit },
+  }));
+}
+
+async function realFetchNativeKlines(mint, resolution, limit) {
+  return normalizeKlines(await gmgnFetch("/v1/market/token_kline", {
+    params: { chain: "sol", address: mint, resolution, limit: Math.max(50, Number(limit) || 300) },
+  }));
+}
+
+// Shared TTL-bounded cache wrapper. Only caches usable (non-empty) results so a transient
+// empty GMGN response can't poison the cache for the whole TTL window and suppress the path.
+async function getCachedKlines(cacheKey, fetchFn) {
   const ttlMs = Math.max(0, Number(indicatorParams().klineCacheTtlSec)) * 1000;
-  const hit = klineCache.get(mint);
+  const hit = klineCache.get(cacheKey);
   if (hit && ttlMs > 0 && Date.now() - hit.ts < ttlMs) return hit.klines;
-  const fetcher = klineFetcher || realFetch1mKlines;
-  const klines = await fetcher(mint);
-  // Only cache a usable (non-empty) result. A transient empty GMGN response must not
-  // poison the cache for the whole TTL window and suppress the GMGN path.
+  const klines = await fetchFn();
   if (Array.isArray(klines) && klines.length > 0) {
-    klineCache.set(mint, { klines, ts: Date.now() });
+    klineCache.set(cacheKey, { klines, ts: Date.now() });
   }
   return klines;
+}
+
+async function getCached1mKlines(mint) {
+  return getCachedKlines(mint, () => (klineFetcher || realFetch1mKlines)(mint));
+}
+
+async function getCachedNativeKlines(mint, resolution, limit) {
+  return getCachedKlines(
+    `${mint}|${resolution}`,
+    () => (nativeKlineFetcher || realFetchNativeKlines)(mint, resolution, limit),
+  );
 }
 
 // Top-level: produce the Meridian-shaped { latest } payload from GMGN klines.
 // Throws on insufficient data or fetch failure — caller (the seam) falls back.
 export async function fetchGmgnIndicatorPayload(mint, { interval, rsiLength } = {}) {
-  const minutes = INTERVAL_MINUTES[String(interval || "").trim().toUpperCase()] || 5;
+  const intervalKey = String(interval || "").trim().toUpperCase();
+  const minutes = INTERVAL_MINUTES[intervalKey] || 5;
+  const params = { ...indicatorParams(), rsiLength: Number(rsiLength) || 2 };
+
+  const nativeIntervals = Array.isArray(params.nativeFetchIntervals) ? params.nativeFetchIntervals : [];
+  if (nativeIntervals.includes(intervalKey)) {
+    // Native-resolution path: fetch N-minute candles directly for the deep history the
+    // path-dependent supertrend needs (the 1m feed caps at ~66 closed 15m bars, below the
+    // last trend-defining band cross on slower tokens → the resample reports the seed's
+    // guess, not the carried state). Berries-SOL 2026-06-02: 66-bar resample read
+    // bearish/0.000597; native 120-bar read bullish/0.000424 = the GMGN chart.
+    const native = await getCachedNativeKlines(mint, `${minutes}m`, params.nativeKlineLimit);
+    if (!Array.isArray(native) || native.length === 0) {
+      throw new Error("GMGN returned empty native kline list");
+    }
+    // resampleKlines is identity for already-aligned N-min candles; reused only for its
+    // tested dropInProgress (decide on the last CLOSED bar, no repaint).
+    const closed = resampleKlines(native, minutes, { dropInProgress: true });
+    const anchor = Math.max(params.bollingerPeriod, params.supertrendPeriod) + 1;
+    const window = closed.slice(-Math.max(anchor, Number(params.nativeWarmupBars) || 0));
+    return computeIndicators(window, params);
+  }
+
   const klines1m = await getCached1mKlines(mint);
   if (!Array.isArray(klines1m) || klines1m.length === 0) {
     throw new Error("GMGN returned empty kline list");
   }
-  const params = { ...indicatorParams(), rsiLength: Number(rsiLength) || 2 };
   // Clock-aligned, in-progress bar excluded → decision taken on the last CLOSED bar.
   const closed = resampleKlines(klines1m, minutes, { dropInProgress: true });
   // Anchor to the last N closed bars so the supertrend seed is stable across fetches.

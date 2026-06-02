@@ -213,6 +213,21 @@ The supertrend seed direction is intentionally derived from price vs HL2 on the 
 (not assumed bullish); this is a deliberate divergence from stock TradingView seeding. Validate
 decision-level parity before flipping: `node scripts/validate-gmgn-indicators.js [<mint>...]`.
 
+**Native-resolution fetch for slow-interval supertrend (`indicatorParams.nativeFetchIntervals`).**
+The 1m feed hard-caps at ~1000 candles → only ~60-66 closed 15m bars (~17h). The supertrend is
+path-dependent: its direction depends on the last trend-defining band cross, and on slower tokens
+that cross sits 80-100+ bars back — outside the 1m-derived 15m window. In that "seed-flap zone" the
+15m supertrend reports the seed's guess and flips bearish/bullish on tiny endpoint shifts, diverging
+from the GMGN chart (Berries-SOL 2026-06-02: 66-bar resample read bearish/0.000597, falsely vetoing a
+bins-below entry; the chart and a 120-bar window read bullish/0.0004236). Listing an interval in
+`indicatorParams.nativeFetchIntervals` (e.g. `["15_MINUTE"]`, set in gmgn-config.json — **live**)
+makes `fetchGmgnIndicatorPayload` fetch native N-minute candles for that interval instead (GMGN serves
+~137 closed 15m bars, ~34h), anchored to `nativeWarmupBars` (default 120) past convergence. Costs one
+extra GMGN call per native interval per mint per cycle; 5m stays on the shared 1m→resample path. Off
+by default (empty list) → legacy resample + single-fetch optimization unchanged. Native fetch failure
+still falls back to meridian via the seam. Regression: the Berries divergence is pinned in
+`test/fixtures/berries-native-15m-klines.json` + `gmgn-indicators.test.js`.
+
 **Stability (resampling is non-repainting and window-anchored).** `resampleKlines` buckets 1m candles
 by wall-clock boundary (`floor(time / N·60s)`), NOT array index — a sliding 1m fetch window no longer
 re-phases the resampled series each refresh. `fetchGmgnIndicatorPayload` then (a) drops the in-progress

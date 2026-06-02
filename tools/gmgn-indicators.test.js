@@ -204,7 +204,8 @@ test("computeIndicators throws on insufficient candles", () => {
     bollingerPeriod: 20, bollingerStdDev: 2, rsiLength: 2, fibLookbackBars: 55,
   }), /insufficient/i);
 });
-import { fetchGmgnIndicatorPayload, __setKlineFetcherForTest, __clearKlineCacheForTest } from "./gmgn-indicators.js";
+import { fetchGmgnIndicatorPayload, __setKlineFetcherForTest, __setNativeKlineFetcherForTest, __clearKlineCacheForTest } from "./gmgn-indicators.js";
+import { config } from "../config.js";
 
 function fakeKlines(n) {
   const out = [];
@@ -216,17 +217,21 @@ function fakeKlines(n) {
 }
 
 test("fetchGmgnIndicatorPayload reuses one fetch for 5m and 15m within TTL", async () => {
-  __clearKlineCacheForTest();
-  let calls = 0;
-  __setKlineFetcherForTest(async () => { calls += 1; return fakeKlines(300); });
+  // Legacy 1m→resample path: native off so both intervals share the single 1m fetch,
+  // independent of whatever gmgn-config.json enables live.
+  await withNativeIntervals([], async () => {
+    __clearKlineCacheForTest();
+    let calls = 0;
+    __setKlineFetcherForTest(async () => { calls += 1; return fakeKlines(300); });
 
-  const five = await fetchGmgnIndicatorPayload("MINT1", { interval: "5_MINUTE", rsiLength: 2 });
-  const fifteen = await fetchGmgnIndicatorPayload("MINT1", { interval: "15_MINUTE", rsiLength: 2 });
+    const five = await fetchGmgnIndicatorPayload("MINT1", { interval: "5_MINUTE", rsiLength: 2 });
+    const fifteen = await fetchGmgnIndicatorPayload("MINT1", { interval: "15_MINUTE", rsiLength: 2 });
 
-  assert.equal(calls, 1, "second interval should hit the per-mint cache");
-  assert.ok(five.latest.supertrend.value > 0);
-  assert.ok(fifteen.latest.supertrend.value > 0);
-  __setKlineFetcherForTest(null); // restore real fetcher
+    assert.equal(calls, 1, "second interval should hit the per-mint cache");
+    assert.ok(five.latest.supertrend.value > 0);
+    assert.ok(fifteen.latest.supertrend.value > 0);
+    __setKlineFetcherForTest(null); // restore real fetcher
+  });
 });
 
 test("fetchGmgnIndicatorPayload supertrend direction is invariant to where the sliding window starts", async () => {
@@ -255,14 +260,16 @@ test("fetchGmgnIndicatorPayload supertrend direction is invariant to where the s
     const pl = await fetchGmgnIndicatorPayload("MINV", { interval: "15_MINUTE", rsiLength: 2 });
     return pl.latest.supertrend.direction;
   };
-  const base = await dir(full);
-  for (const k of [15, 30, 45, 60, 90]) {
-    assert.equal(
-      await dir(full.slice(k)),
-      base,
-      `direction must not change when the window starts ${k} minutes later`,
-    );
-  }
+  await withNativeIntervals([], async () => { // legacy resample path under test
+    const base = await dir(full);
+    for (const k of [15, 30, 45, 60, 90]) {
+      assert.equal(
+        await dir(full.slice(k)),
+        base,
+        `direction must not change when the window starts ${k} minutes later`,
+      );
+    }
+  });
   __setKlineFetcherForTest(null);
 });
 
@@ -273,6 +280,17 @@ const __testdir = dirname(fileURLToPath(import.meta.url));
 const cumFixture = JSON.parse(
   readFileSync(join(__testdir, "../test/fixtures/cum-1m-klines-at-deploy.json"), "utf8"),
 );
+const berriesNative = JSON.parse(
+  readFileSync(join(__testdir, "../test/fixtures/berries-native-15m-klines.json"), "utf8"),
+);
+
+// Run `fn` with config.gmgn.indicatorParams.nativeFetchIntervals set, then restore.
+async function withNativeIntervals(intervals, fn) {
+  const orig = config.gmgn;
+  config.gmgn = { ...(orig || {}), indicatorParams: { ...(orig?.indicatorParams || {}), nativeFetchIntervals: intervals } };
+  try { return await fn(); }
+  finally { config.gmgn = orig; }
+}
 
 test("fetchGmgnIndicatorPayload: CUM 15m at deploy reads bearish, matching the GMGN chart", async () => {
   // Regression for the seed/warmup-starvation false positive. CUM-SOL's last deploy
@@ -283,7 +301,9 @@ test("fetchGmgnIndicatorPayload: CUM 15m at deploy reads bearish, matching the G
   // Evidence + threshold: scripts/sweep-warmup-parity.js.
   __clearKlineCacheForTest();
   __setKlineFetcherForTest(async () => cumFixture.klines);
-  const pl = await fetchGmgnIndicatorPayload(cumFixture.mint, { interval: "15_MINUTE", rsiLength: 2 });
+  // Pin the legacy 1m→resample path: this regression is about the 66-bar warmup, not native.
+  const pl = await withNativeIntervals([], () =>
+    fetchGmgnIndicatorPayload(cumFixture.mint, { interval: "15_MINUTE", rsiLength: 2 }));
   __setKlineFetcherForTest(null);
 
   const { candle, supertrend } = pl.latest;
@@ -374,4 +394,53 @@ test("computeIndicators recent series emits null bands for bars lacking full BB 
   assert.equal(payload.recent[0].bbMiddle, null, "insufficient history → null bbMiddle");
   // Latest bar has full history → finite bands.
   assert.ok(Number.isFinite(payload.recent[payload.recent.length - 1].bbLower), "last bar finite band");
+});
+
+test("nativeFetchIntervals routes 15m to a native-resolution fetch and leaves 5m on the 1m feed", async () => {
+  __clearKlineCacheForTest();
+  const nativeCalls = [];
+  let oneMinCalls = 0;
+  __setNativeKlineFetcherForTest(async (_mint, resolution) => { nativeCalls.push(resolution); return berriesNative.klines; });
+  __setKlineFetcherForTest(async () => { oneMinCalls += 1; return fakeKlines(1000); });
+
+  await withNativeIntervals(["15_MINUTE"], async () => {
+    const fifteen = await fetchGmgnIndicatorPayload(berriesNative.mint, { interval: "15_MINUTE", rsiLength: 2 });
+    const five = await fetchGmgnIndicatorPayload(berriesNative.mint, { interval: "5_MINUTE", rsiLength: 2 });
+    assert.deepEqual(nativeCalls, ["15m"], "15m must fetch native 15m candles");
+    assert.equal(oneMinCalls, 1, "5m must still use the 1m feed; 15m must NOT touch it");
+    assert.ok(fifteen.latest.supertrend.value > 0);
+    assert.ok(five.latest.supertrend.value > 0);
+  });
+
+  __setNativeKlineFetcherForTest(null);
+  __setKlineFetcherForTest(null);
+});
+
+test("Berries 15m native deep-history reads bullish (GMGN chart), where the 1m-resample window-cap read bearish", async () => {
+  // 2026-06-02 deploy-check bar: the 1m feed caps at ~66 closed 15m bars and, inside the
+  // supertrend seed-flap zone, read bearish/0.000597 — wrongly vetoing a bins-below entry.
+  // GMGN's TradingView supertrend(10,3) read bullish/0.0004236 on the same bar. Native 15m
+  // candles carry the deeper history (nativeWarmupBars=120) and converge to the chart.
+  // Drop the fixture's last `divergenceEndpointDropLast` bars to land on that bar.
+  __clearKlineCacheForTest();
+  const atDeployBar = berriesNative.klines.slice(0, berriesNative.klines.length - berriesNative.divergenceEndpointDropLast);
+  __setNativeKlineFetcherForTest(async () => atDeployBar);
+
+  const pl = await withNativeIntervals(["15_MINUTE"], () =>
+    fetchGmgnIndicatorPayload(berriesNative.mint, { interval: "15_MINUTE", rsiLength: 2 }));
+  __setNativeKlineFetcherForTest(null);
+
+  const { supertrend, candle } = pl.latest;
+  assert.equal(supertrend.direction, berriesNative.native120Direction, "native 15m must read bullish, matching the chart");
+  assert.ok(candle.close > supertrend.value,
+    `price (${candle.close}) must sit above supertrend (${supertrend.value}) → bullish, entry gate passes`);
+  const drift = Math.abs(supertrend.value - berriesNative.gmgn15mSupertrend) / berriesNative.gmgn15mSupertrend;
+  assert.ok(drift < 0.05,
+    `native 15m ST ${supertrend.value} should track GMGN's ${berriesNative.gmgn15mSupertrend} (drift ${(drift * 100).toFixed(2)}%)`);
+
+  // Same bar through the legacy capped window (66 resampled bars) reproduces the bug: bearish.
+  const closed = resampleKlines(atDeployBar, 15, { dropInProgress: true });
+  const legacy = computeSupertrend(closed.slice(-DEFAULT_INDICATOR_PARAMS.warmupBars));
+  assert.equal(legacy.direction, berriesNative.legacy66Direction,
+    "the 66-bar resample window reproduces the bearish false-veto the native path fixes");
 });

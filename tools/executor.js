@@ -451,6 +451,9 @@ const toolMap = {
       rsiOverbought: ["indicators", "rsiOverbought", ["chartIndicators", "rsiOverbought"]],
       maxEntryRsi: ["indicators", "maxEntryRsi", ["chartIndicators", "maxEntryRsi"]],
       requireAllIntervals: ["indicators", "requireAllIntervals", ["chartIndicators", "requireAllIntervals"]],
+      pullbackLookbackBars: ["indicators", "pullbackLookbackBars", ["chartIndicators", "pullbackLookbackBars"]],
+      pullbackDipBand: ["indicators", "pullbackDipBand", ["chartIndicators", "pullbackDipBand"]],
+      pullbackReclaimBand: ["indicators", "pullbackReclaimBand", ["chartIndicators", "pullbackReclaimBand"]],
       supertrendExitEnabled: ["indicators", "supertrendExitEnabled", ["chartIndicators", "supertrendExitEnabled"]],
       supertrendExitInterval: ["indicators", "supertrendExitInterval", ["chartIndicators", "supertrendExitInterval"]],
     };

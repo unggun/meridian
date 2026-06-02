@@ -165,7 +165,7 @@ export const config = {
       bollingerStdDev: 2,
       fibLookbackBars: 55,
       klineCacheTtlSec: 30,
-      klineLimit: 900, // 1m bars fetched per mint; ~60x15m warmup. GMGN caps at 1000/call.
+      klineLimit: 1000, // 1m bars fetched per mint; GMGN caps at 1000/call (~66 closed 15m bars). Matches DEFAULT_INDICATOR_PARAMS.
       ...(gmgnUserConfig.indicatorParams || {}),
     },
     indicatorInterval: gmgnValue("indicatorInterval", "gmgnIndicatorInterval", "15_MINUTE"),

@@ -98,7 +98,8 @@ export function computeBollinger(closes, period = 20, stdDevMult = 2) {
 export function buildRecentSeries(candles, params, n) {
   const out = [];
   if (!Array.isArray(candles) || candles.length === 0) return out;
-  const count = Math.max(1, Math.floor(n) || 1);
+  const count = Math.max(0, Number.isFinite(n) ? Math.floor(n) : 1);
+  if (count === 0) return out;
   const start = Math.max(0, candles.length - count);
   for (let i = start; i < candles.length; i++) {
     const closesUpToI = candles.slice(0, i + 1).map((c) => c.close);

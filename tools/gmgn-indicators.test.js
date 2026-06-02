@@ -356,3 +356,19 @@ test("computeIndicators emits a recent series with close/low/bbLower/bbMiddle", 
   assert.ok(Number.isFinite(last.bbLower), "bbLower finite");
   assert.ok(Number.isFinite(last.bbMiddle), "bbMiddle finite");
 });
+
+test("computeIndicators recent series emits null bands for bars lacking full BB history", () => {
+  // 30 ascending candles; ask for 25 recent bars so the earliest ones have < bollingerPeriod (20) closes.
+  const candles = Array.from({ length: 30 }, (_, i) => ({
+    time: ALIGNED_5M + i * 5 * min,
+    open: 100 + i, high: 102 + i, low: 98 + i, close: 100 + i,
+  }));
+  const params = { ...DEFAULT_INDICATOR_PARAMS, recentSeriesBars: 25, rsiLength: 2 };
+  const payload = computeIndicators(candles, params);
+  assert.equal(payload.recent.length, 25);
+  // Earliest recent bar (candle index 5 → 6 closes < period 20) has null bands.
+  assert.equal(payload.recent[0].bbLower, null, "insufficient history → null bbLower");
+  assert.equal(payload.recent[0].bbMiddle, null, "insufficient history → null bbMiddle");
+  // Latest bar has full history → finite bands.
+  assert.ok(Number.isFinite(payload.recent[payload.recent.length - 1].bbLower), "last bar finite band");
+});

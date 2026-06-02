@@ -322,12 +322,13 @@ export const config = {
     rsiOverbought: indicatorUserConfig.rsiOverbought ?? 80,
     maxEntryRsi: indicatorUserConfig.maxEntryRsi ?? null,
     requireAllIntervals: indicatorUserConfig.requireAllIntervals ?? false,
-    // supertrend_bb_pullback composite entry tuning (live-tunable via /setcfg).
-    // Window of closed 5m bars scanned for the pullback. Size so N*5min exceeds the
-    // screening interval + one bar (N=8 ≈ 40min for the default 30-min screener).
-    pullbackLookbackBars: indicatorUserConfig.pullbackLookbackBars ?? 8,
-    pullbackDipBand: indicatorUserConfig.pullbackDipBand ?? "lower",          // "lower" | "middle"
-    pullbackReclaimBand: indicatorUserConfig.pullbackReclaimBand ?? "middle", // "middle" | "lower"
+    // supertrend_bb_extension composite entry tuning (live-tunable via /setcfg).
+    // Window of closed 5m bars scanned for the upper-band tag. Upper-band entry is
+    // time-sensitive (deploy while still near the high), so N is small; for reliable
+    // capture lower screeningIntervalMin toward ~10-15 (N*5min should span the cadence).
+    extensionLookbackBars: indicatorUserConfig.extensionLookbackBars ?? 3,
+    extensionTagBand: indicatorUserConfig.extensionTagBand ?? "upper",        // "upper" | "middle"
+    extensionFloorBand: indicatorUserConfig.extensionFloorBand ?? "middle",   // "middle" | "lower"
     // Independent trend-breakdown exit. Fires whenever the configured interval's
     // supertrend flips bearish (or price sits below a bearish supertrend),
     // regardless of PnL and regardless of the `enabled`/exitPreset chart-exit

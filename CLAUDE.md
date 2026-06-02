@@ -225,17 +225,25 @@ interval of lag). As a second guard, chart-exit closes are **debounced** in inde
 `confirmChartExitDebounce` (state.js): a bearish signal must persist across two consecutive management
 cycles (`pending_chart_exit_since`) before closing, so a single artifact can't cut a fresh position.
 
-**Entry preset `supertrend_bb_pullback` (composite, cross-interval).** Confirms a deploy
-when the **15m supertrend is bullish** (HTF trend filter) AND price **pulled back to a
-Bollinger band and reclaimed it on 5m** within `indicators.pullbackLookbackBars` closed
-bars (default 8), with the standard `close >= supertrend` veto. Unlike other presets it
-evaluates two intervals together via `confirmSupertrendBbPullback` (tools/chart-indicators.js),
-bypassing the per-interval `intervals`/`requireAllIntervals` loop. The pullback is a
-*durable* window state (not a single-bar event) so it survives the 30-min screener
-cadence — size `pullbackLookbackBars` so `N*5min` exceeds the screening interval. The
-`recent` per-bar band series powering it comes from the GMGN path (`computeIndicators`);
-the meridian fallback has no series and **degrades to a single-bar pullback check**.
-Tune via `/setcfg pullbackLookbackBars|pullbackDipBand|pullbackReclaimBand`.
+**Entry preset `supertrend_bb_extension` (composite, cross-interval).** Polarity matters:
+this agent deploys **single-sided SOL with `bins_below` only** (active bin = TOP of range),
+so the position earns fees + accumulates the token as price trades **DOWN** into the
+below-price liquidity, and goes out-of-range (all SOL, no fees) on any **up** move. The
+correct deploy timing is therefore when price is **elevated and about to pull back into the
+bins** — NOT a buy-the-dip reclaim (that sends price away from the liquidity). Confirms a
+deploy when the **15m supertrend is bullish** (trend filter, so the pullback recovers) AND
+price **tagged the upper 5m Bollinger band within `indicators.extensionLookbackBars` closed
+bars (default 3) AND the latest close is still above the floor band** (pullback not yet
+completed), with the `close >= supertrend` veto. Evaluates two intervals together via
+`confirmSupertrendBbExtension` (tools/chart-indicators.js), bypassing the per-interval
+`intervals`/`requireAllIntervals` loop. The `recent` per-bar band series (now including
+`high`/`bbUpper`) comes from the GMGN path (`computeIndicators`); the meridian fallback has
+no series and **degrades to a single-bar upper-band-tag check**. Upper-band entry is
+time-sensitive, so N is small — for reliable capture at a 30-min screener cadence lower
+`screeningIntervalMin` toward ~10-15. Residual IL risk (price tags the high then dumps
+without recovering) is mitigated by the 15m filter + veto, not eliminated. Tune via
+`/setcfg extensionLookbackBars|extensionTagBand|extensionFloorBand`. (Supersedes the prior
+`supertrend_bb_pullback`, which was lower-band/buy-the-dip — wrong polarity for bins-below LP.)
 
 ---
 

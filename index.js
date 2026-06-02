@@ -1533,7 +1533,7 @@ function renderSettingsMenu(page = "main") {
         settingButton("Entry: ST", "cfg:set:indicatorEntryPreset:supertrend_break"),
         settingButton("Entry: RSI", "cfg:set:indicatorEntryPreset:rsi_reversal"),
         settingButton("Entry: ST/RSI", "cfg:set:indicatorEntryPreset:supertrend_or_rsi"),
-        settingButton("Entry: ST+BB", "cfg:set:indicatorEntryPreset:supertrend_bb_pullback"),
+        settingButton("Entry: ST+BB↑", "cfg:set:indicatorEntryPreset:supertrend_bb_extension"),
       ],
       [
         settingButton("Exit: ST", "cfg:set:indicatorExitPreset:supertrend_break"),

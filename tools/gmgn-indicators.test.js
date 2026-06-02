@@ -340,7 +340,7 @@ test("fetchGmgnIndicatorPayload does not cache a transient empty kline list", as
   __setKlineFetcherForTest(null);
 });
 
-test("computeIndicators emits a recent series with close/low/bbLower/bbMiddle", () => {
+test("computeIndicators emits a recent series with close/high/low/bbLower/bbMiddle/bbUpper", () => {
   // 30 ascending candles so bollinger/supertrend/rsi are all computable.
   const candles = Array.from({ length: 30 }, (_, i) => ({
     time: ALIGNED_5M + i * 5 * min,
@@ -352,9 +352,12 @@ test("computeIndicators emits a recent series with close/low/bbLower/bbMiddle", 
   assert.equal(payload.recent.length, 6);
   const last = payload.recent[payload.recent.length - 1];
   assert.equal(last.close, 129);
+  assert.equal(last.high, 131);
   assert.equal(last.low, 127);
   assert.ok(Number.isFinite(last.bbLower), "bbLower finite");
   assert.ok(Number.isFinite(last.bbMiddle), "bbMiddle finite");
+  assert.ok(Number.isFinite(last.bbUpper), "bbUpper finite");
+  assert.ok(last.bbUpper > last.bbMiddle && last.bbMiddle > last.bbLower, "bands ordered");
 });
 
 test("computeIndicators recent series emits null bands for bars lacking full BB history", () => {

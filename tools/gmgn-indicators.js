@@ -91,10 +91,10 @@ export function computeBollinger(closes, period = 20, stdDevMult = 2) {
   };
 }
 
-// Per-bar Bollinger lower/middle (plus close/low) for the last `n` candles.
-// Each band is computed over the trailing `period` closes ending at that bar, so the
-// series is non-repainting. Used to detect a pullback to a band across a window of
-// recently CLOSED bars. Bars without enough history get null bands.
+// Per-bar Bollinger bands (plus close/high/low) for the last `n` candles. Each band is
+// computed over the trailing `period` closes ending at that bar, so the series is
+// non-repainting. Used to detect band interactions across a window of recently CLOSED
+// bars — a lower-band dip OR an upper-band tag. Bars without enough history get null bands.
 export function buildRecentSeries(candles, params, n) {
   const out = [];
   if (!Array.isArray(candles) || candles.length === 0) return out;
@@ -106,9 +106,11 @@ export function buildRecentSeries(candles, params, n) {
     const bb = computeBollinger(closesUpToI, params.bollingerPeriod, params.bollingerStdDev);
     out.push({
       close: candles[i].close,
+      high: candles[i].high,
       low: candles[i].low,
       bbLower: bb ? bb.lower : null,
       bbMiddle: bb ? bb.middle : null,
+      bbUpper: bb ? bb.upper : null,
     });
   }
   return out;
@@ -276,9 +278,9 @@ export const DEFAULT_INDICATOR_PARAMS = {
   // gmgn-indicators.test.js.
   warmupBars: 66,
   // How many most-recent CLOSED bars to expose in the payload's `recent` series.
-  // Consumed by the supertrend_bb_pullback entry preset to detect a pullback across a
-  // window of closed bars (a durable signal, vs a single-bar event that the 30-min
-  // screener would usually miss). Keep >= the largest expected pullbackLookbackBars.
+  // Consumed by the supertrend_bb_extension entry preset to detect an upper-band tag across
+  // a window of closed bars (a durable signal, vs a single-bar event that the 30-min
+  // screener would usually miss). Keep >= the largest expected extensionLookbackBars.
   recentSeriesBars: 16,
 };
 

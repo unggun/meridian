@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 // We test the dispatcher's fallback by pointing the GMGN path at a fetcher that throws,
 // and stubbing the Meridian fetch via a global fetch override.
-import { fetchChartIndicatorsForMint, evaluateSupertrendBbPullback, confirmIndicatorPreset } from "./chart-indicators.js";
+import { fetchChartIndicatorsForMint, evaluateSupertrendBbExtension, confirmIndicatorPreset } from "./chart-indicators.js";
 import { __setKlineFetcherForTest, __clearKlineCacheForTest } from "./gmgn-indicators.js";
 import { config } from "../config.js";
 
@@ -49,12 +49,12 @@ test("fetchChartIndicatorsForMint uses meridian directly when source=meridian", 
 });
 
 // 5m payload builder. `recent` optional → omit to exercise the degrade path.
-const mk5 = ({ close, low, lower, middle, st, recent }) => ({
+const mk5 = ({ close, high, low, lower, middle, upper, st, recent }) => ({
   latest: {
-    candle: { close, low, high: close + 1, open: close },
+    candle: { close, high: high ?? close + 1, low: low ?? close - 1, open: close },
     previousCandle: { close },
     rsi: { value: 50 },
-    bollinger: { upper: middle + (middle - lower), middle, lower },
+    bollinger: { upper, middle, lower },
     supertrend: { value: st, direction: close >= st ? "bullish" : "bearish" },
     states: {},
   },
@@ -70,79 +70,91 @@ const mk15 = (direction) => ({
     states: {},
   },
 });
-const PARAMS = { lookbackBars: 6, dipBand: "lower", reclaimBand: "middle" };
+const PARAMS = { lookbackBars: 6, tagBand: "upper", floorBand: "middle" };
 
-test("bb-pullback: 15m bullish + 5m pullback-and-reclaim in window → confirm", () => {
+test("bb-extension: 15m bullish + 5m upper-band tag in window, still above middle → confirm", () => {
   const recent = [
-    { close: 101, low: 90, bbLower: 95, bbMiddle: 100 }, // dip: low 90 <= lower 95
-    { close: 103, low: 100, bbLower: 96, bbMiddle: 101 },
-    { close: 105, low: 102, bbLower: 97, bbMiddle: 102 },
+    { close: 108, high: 111, low: 105, bbLower: 90, bbMiddle: 100, bbUpper: 110 }, // tag: high 111 >= upper 110
+    { close: 106, high: 108, low: 104, bbLower: 91, bbMiddle: 100, bbUpper: 110 },
+    { close: 105, high: 107, low: 103, bbLower: 92, bbMiddle: 100, bbUpper: 110 },
   ];
-  const r = evaluateSupertrendBbPullback(
-    mk5({ close: 105, low: 102, lower: 97, middle: 100, st: 95, recent }),
+  const r = evaluateSupertrendBbExtension(
+    mk5({ close: 105, high: 107, low: 103, lower: 92, middle: 100, upper: 110, st: 95, recent }),
     mk15("bullish"), PARAMS);
   assert.equal(r.confirmed, true);
 });
 
-test("bb-pullback: dip but no reclaim (close below middle) → reject", () => {
-  const recent = [{ close: 96, low: 90, bbLower: 95, bbMiddle: 100 }];
-  const r = evaluateSupertrendBbPullback(
-    mk5({ close: 98, low: 90, lower: 95, middle: 100, st: 95, recent }),
+test("bb-extension: tag present but latest close below floor (pullback done) → reject", () => {
+  const recent = [{ close: 108, high: 111, low: 105, bbLower: 90, bbMiddle: 100, bbUpper: 110 }];
+  const r = evaluateSupertrendBbExtension(
+    mk5({ close: 98, high: 100, low: 96, lower: 90, middle: 100, upper: 110, st: 95, recent }),
     mk15("bullish"), PARAMS);
   assert.equal(r.confirmed, false);
-  assert.match(r.reason, /reclaim/i);
+  assert.match(r.reason, /floor/i);
 });
 
-test("bb-pullback: valid 5m setup but 15m bearish → reject", () => {
-  const recent = [{ close: 101, low: 90, bbLower: 95, bbMiddle: 100 }];
-  const r = evaluateSupertrendBbPullback(
-    mk5({ close: 105, low: 102, lower: 97, middle: 100, st: 95, recent }),
+test("bb-extension: valid 5m setup but 15m bearish → reject", () => {
+  const recent = [{ close: 108, high: 111, low: 105, bbLower: 90, bbMiddle: 100, bbUpper: 110 }];
+  const r = evaluateSupertrendBbExtension(
+    mk5({ close: 105, high: 107, low: 103, lower: 92, middle: 100, upper: 110, st: 95, recent }),
     mk15("bearish"), PARAMS);
   assert.equal(r.confirmed, false);
   assert.match(r.reason, /15m/i);
 });
 
-test("bb-pullback: veto when 5m close below supertrend → reject", () => {
-  const recent = [{ close: 101, low: 90, bbLower: 95, bbMiddle: 100 }];
-  const r = evaluateSupertrendBbPullback(
-    mk5({ close: 92, low: 90, lower: 95, middle: 100, st: 95, recent }),
+test("bb-extension: veto when 5m close below supertrend → reject", () => {
+  const recent = [{ close: 108, high: 111, low: 105, bbLower: 90, bbMiddle: 100, bbUpper: 110 }];
+  const r = evaluateSupertrendBbExtension(
+    mk5({ close: 92, high: 111, low: 90, lower: 90, middle: 100, upper: 110, st: 95, recent }),
     mk15("bullish"), PARAMS);
   assert.equal(r.confirmed, false);
   assert.match(r.reason, /veto/i);
 });
 
-test("bb-pullback: degrade path (no recent) uses single-bar check → confirm", () => {
-  const r = evaluateSupertrendBbPullback(
-    mk5({ close: 105, low: 95, lower: 95, middle: 100, st: 95 }), // low 95 <= lower 95
+test("bb-extension: no upper-band tag in window → reject", () => {
+  const recent = [
+    { close: 104, high: 106, low: 102, bbLower: 90, bbMiddle: 100, bbUpper: 110 }, // high 106 < upper 110
+    { close: 105, high: 107, low: 103, bbLower: 91, bbMiddle: 100, bbUpper: 110 },
+  ];
+  const r = evaluateSupertrendBbExtension(
+    mk5({ close: 105, high: 107, low: 103, lower: 91, middle: 100, upper: 110, st: 95, recent }),
+    mk15("bullish"), PARAMS);
+  assert.equal(r.confirmed, false);
+  assert.match(r.reason, /tag/i);
+});
+
+test("bb-extension: degrade path (no recent) uses single-bar tag → confirm", () => {
+  const r = evaluateSupertrendBbExtension(
+    mk5({ close: 105, high: 111, low: 104, lower: 90, middle: 100, upper: 110, st: 95 }), // high 111 >= upper 110
     mk15("bullish"), PARAMS);
   assert.equal(r.confirmed, true);
   assert.equal(r.degraded, true);
 });
 
-test("bb-pullback: degrade path (no recent), no single-bar dip → reject", () => {
-  // low=102 > lower=95: no dip on the single bar
-  const r = evaluateSupertrendBbPullback(
-    mk5({ close: 105, low: 102, lower: 95, middle: 100, st: 95 }),
+test("bb-extension: degrade path (no recent), no single-bar tag → reject", () => {
+  // high=108 < upper=110: no tag on the single bar
+  const r = evaluateSupertrendBbExtension(
+    mk5({ close: 105, high: 108, low: 104, lower: 90, middle: 100, upper: 110, st: 95 }),
     mk15("bullish"), PARAMS);
   assert.equal(r.confirmed, false);
   assert.equal(r.degraded, true);
   assert.match(r.reason, /degrade/i);
 });
 
-test("bb-pullback: dip outside lookback window → reject", () => {
+test("bb-extension: tag outside lookback window → reject", () => {
   const recent = [
-    { close: 101, low: 90, bbLower: 95, bbMiddle: 100 }, // dip, but oldest
-    { close: 103, low: 101, bbLower: 96, bbMiddle: 101 },
-    { close: 105, low: 102, bbLower: 97, bbMiddle: 102 },
+    { close: 108, high: 111, low: 105, bbLower: 90, bbMiddle: 100, bbUpper: 110 }, // tag, but oldest
+    { close: 106, high: 108, low: 104, bbLower: 91, bbMiddle: 100, bbUpper: 110 },
+    { close: 105, high: 107, low: 103, bbLower: 92, bbMiddle: 100, bbUpper: 110 },
   ];
-  const r = evaluateSupertrendBbPullback(
-    mk5({ close: 105, low: 102, lower: 97, middle: 100, st: 95, recent }),
-    mk15("bullish"), { lookbackBars: 2, dipBand: "lower", reclaimBand: "middle" });
+  const r = evaluateSupertrendBbExtension(
+    mk5({ close: 105, high: 107, low: 103, lower: 92, middle: 100, upper: 110, st: 95, recent }),
+    mk15("bullish"), { lookbackBars: 2, tagBand: "upper", floorBand: "middle" });
   assert.equal(r.confirmed, false);
-  assert.match(r.reason, /pullback/i);
+  assert.match(r.reason, /tag/i);
 });
 
-test("confirmIndicatorPreset bb-pullback fails closed (skipped) when fetches error", async () => {
+test("confirmIndicatorPreset bb-extension fails closed (skipped) when fetches error", async () => {
   const prev = {
     src: config.gmgn.indicatorSource,
     en: config.indicators.enabled,
@@ -150,7 +162,7 @@ test("confirmIndicatorPreset bb-pullback fails closed (skipped) when fetches err
   };
   config.gmgn.indicatorSource = "gmgn";
   config.indicators.enabled = true;
-  config.indicators.entryPreset = "supertrend_bb_pullback";
+  config.indicators.entryPreset = "supertrend_bb_extension";
 
   __clearKlineCacheForTest();
   __setKlineFetcherForTest(async () => { throw new Error("simulated GMGN outage"); });
@@ -159,7 +171,7 @@ test("confirmIndicatorPreset bb-pullback fails closed (skipped) when fetches err
 
   try {
     const res = await confirmIndicatorPreset({ mint: "MINTERR", side: "entry", refresh: true });
-    assert.equal(res.preset, "supertrend_bb_pullback");
+    assert.equal(res.preset, "supertrend_bb_extension");
     assert.equal(res.skipped, true);
     assert.equal(res.confirmed, true); // fail-open here → executor fails closed on `skipped`
     assert.equal(res.intervals.length, 2);
@@ -174,21 +186,21 @@ test("confirmIndicatorPreset bb-pullback fails closed (skipped) when fetches err
   }
 });
 
-test("confirmIndicatorPreset routes supertrend_bb_pullback through the composite (degrade path)", async () => {
+test("confirmIndicatorPreset routes supertrend_bb_extension through the composite (degrade path)", async () => {
   const prev = {
     src: config.gmgn.indicatorSource,
     en: config.indicators.enabled,
     ep: config.indicators.entryPreset,
-    lb: config.indicators.pullbackLookbackBars,
-    db: config.indicators.pullbackDipBand,
-    rb: config.indicators.pullbackReclaimBand,
+    lb: config.indicators.extensionLookbackBars,
+    tb: config.indicators.extensionTagBand,
+    fb: config.indicators.extensionFloorBand,
   };
   config.gmgn.indicatorSource = "meridian"; // no `recent` → exercise degrade + routing
   config.indicators.enabled = true;
-  config.indicators.entryPreset = "supertrend_bb_pullback";
-  config.indicators.pullbackLookbackBars = 6;
-  config.indicators.pullbackDipBand = "lower";
-  config.indicators.pullbackReclaimBand = "middle";
+  config.indicators.entryPreset = "supertrend_bb_extension";
+  config.indicators.extensionLookbackBars = 3;
+  config.indicators.extensionTagBand = "upper";
+  config.indicators.extensionFloorBand = "middle";
 
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url) => ({
@@ -196,13 +208,13 @@ test("confirmIndicatorPreset routes supertrend_bb_pullback through the composite
     async text() {
       const is15 = String(url).includes("15_MINUTE");
       return JSON.stringify(is15
-        ? { latest: { candle: { close: 100, low: 99 }, supertrend: { value: 90, direction: "bullish" }, bollinger: { lower: 80, middle: 90, upper: 100 }, rsi: { value: 50 } } }
-        : { latest: { candle: { close: 105, low: 95 }, supertrend: { value: 95, direction: "bullish" }, bollinger: { lower: 95, middle: 100, upper: 110 }, rsi: { value: 50 } } });
+        ? { latest: { candle: { close: 100, high: 101, low: 99 }, supertrend: { value: 90, direction: "bullish" }, bollinger: { lower: 80, middle: 90, upper: 100 }, rsi: { value: 50 } } }
+        : { latest: { candle: { close: 105, high: 111, low: 104 }, supertrend: { value: 95, direction: "bullish" }, bollinger: { lower: 95, middle: 100, upper: 110 }, rsi: { value: 50 } } });
     },
   });
   try {
     const res = await confirmIndicatorPreset({ mint: "MINTZ", side: "entry", refresh: true });
-    assert.equal(res.preset, "supertrend_bb_pullback");
+    assert.equal(res.preset, "supertrend_bb_extension");
     assert.equal(res.confirmed, true);
     assert.equal(res.enabled, true);
     assert.equal(res.skipped, false);
@@ -213,8 +225,8 @@ test("confirmIndicatorPreset routes supertrend_bb_pullback through the composite
     config.gmgn.indicatorSource = prev.src;
     config.indicators.enabled = prev.en;
     config.indicators.entryPreset = prev.ep;
-    config.indicators.pullbackLookbackBars = prev.lb;
-    config.indicators.pullbackDipBand = prev.db;
-    config.indicators.pullbackReclaimBand = prev.rb;
+    config.indicators.extensionLookbackBars = prev.lb;
+    config.indicators.extensionTagBand = prev.tb;
+    config.indicators.extensionFloorBand = prev.fb;
   }
 });

@@ -236,22 +236,24 @@ function evaluatePreset(side, preset, payload) {
   }
 }
 
-// Pure decision for the supertrend_bb_pullback composite entry (no I/O).
-// payload5m / payload15m: { latest, recent? } payloads. params is pre-coerced:
-//   { lookbackBars:number, dipBand:"lower"|"middle", reclaimBand:"middle"|"lower" }.
-// Thesis: 15m supertrend bullish (trend filter) + a 5m pullback to a band within the
-// last N closed bars that has reclaimed back above the reclaim band now (timing), with
-// the standard close>=supertrend veto. Degrades to a single-bar check when no `recent`
-// series is present (meridian fallback). Returns { confirmed, reason, signal5m, signal15m, degraded }.
-export function evaluateSupertrendBbPullback(payload5m, payload15m, params) {
+// Pure decision for the supertrend_bb_extension composite entry (no I/O). params pre-coerced:
+//   { lookbackBars:number, tagBand:"upper"|"middle", floorBand:"middle"|"lower" }.
+// Thesis (single-sided SOL, bins BELOW the active bin): deploy when price is ELEVATED and
+// about to pull back DOWN into the below-price liquidity. Confirm when 15m supertrend is
+// bullish (trend filter, so the pullback recovers), price TAGGED the upper 5m band within
+// the last N closed bars (it got extended), the latest close is still above the floor band
+// (the pullback hasn't already completed/broken down), and close>=supertrend (veto).
+// Degrades to a single-bar check when no `recent` series is present (meridian fallback).
+// Returns { confirmed, reason, signal5m, signal15m, degraded }.
+export function evaluateSupertrendBbExtension(payload5m, payload15m, params) {
   const s5 = buildSignalSummary(payload5m);
   const s15 = buildSignalSummary(payload15m);
-  const lookbackBars = Math.max(1, Math.floor(params.lookbackBars) || 8);
-  const dipBand = params.dipBand === "middle" ? "middle" : "lower";
-  const reclaimBand = params.reclaimBand === "lower" ? "lower" : "middle";
+  const lookbackBars = Math.max(1, Math.floor(params.lookbackBars) || 3);
+  const tagBand = params.tagBand === "middle" ? "middle" : "upper";
+  const floorBand = params.floorBand === "lower" ? "lower" : "middle";
   const base = { signal5m: s5, signal15m: s15, degraded: false };
 
-  // 1. HTF trend filter — 15m supertrend must be bullish.
+  // 1. HTF trend filter — 15m supertrend must be bullish (so the pullback recovers).
   if (s15.supertrendDirection !== "bullish") {
     return { ...base, confirmed: false, reason: `15m supertrend ${s15.supertrendDirection} (need bullish)` };
   }
@@ -259,42 +261,42 @@ export function evaluateSupertrendBbPullback(payload5m, payload15m, params) {
   if (s5.close != null && s5.supertrendValue != null && s5.close < s5.supertrendValue) {
     return { ...base, confirmed: false, reason: `Veto: 5m close ${s5.close} < supertrend ${s5.supertrendValue}` };
   }
-  // 3. Reclaim — latest 5m close back above the reclaim band.
-  const reclaimLevel = reclaimBand === "lower" ? s5.lowerBand : s5.middleBand;
-  if (s5.close == null || reclaimLevel == null || s5.close < reclaimLevel) {
-    return { ...base, confirmed: false, reason: `No reclaim: 5m close ${s5.close} < ${reclaimBand} band ${reclaimLevel}` };
+  // 3. Floor — latest 5m close still above the floor band (pullback not yet completed).
+  const floorLevel = floorBand === "lower" ? s5.lowerBand : s5.middleBand;
+  if (s5.close == null || floorLevel == null || s5.close < floorLevel) {
+    return { ...base, confirmed: false, reason: `Below floor: 5m close ${s5.close} < ${floorBand} band ${floorLevel}` };
   }
-  // 4. Pullback — a dip to the dip band within the lookback window.
+  // 4. Extension — price tagged the tag band (high >= band) within the lookback window.
   const recent = Array.isArray(payload5m?.recent) ? payload5m.recent : null;
-  let dipped = false;
+  let tagged = false;
   let degraded = false;
   if (recent && recent.length > 0) {
     const lookbackWindow = recent.slice(-lookbackBars);
-    dipped = lookbackWindow.some((bar) => {
-      const level = dipBand === "middle" ? bar.bbMiddle : bar.bbLower;
-      return level != null && bar.low != null && bar.low <= level;
+    tagged = lookbackWindow.some((bar) => {
+      const level = tagBand === "middle" ? bar.bbMiddle : bar.bbUpper;
+      return level != null && bar.high != null && bar.high >= level;
     });
   } else {
     // Degrade: no series (meridian fallback) → single-bar check on the latest 5m bar.
     degraded = true;
-    const dipLevel = dipBand === "middle" ? s5.middleBand : s5.lowerBand;
-    const rawLow = payload5m?.latest?.candle?.low;
-    const low5 = rawLow != null ? safeNum(rawLow) : s5.close;
-    dipped = dipLevel != null && low5 != null && low5 <= dipLevel;
+    const tagLevel = tagBand === "middle" ? s5.middleBand : s5.upperBand;
+    const rawHigh = payload5m?.latest?.candle?.high;
+    const high5 = rawHigh != null ? safeNum(rawHigh) : s5.close;
+    tagged = tagLevel != null && high5 != null && high5 >= tagLevel;
   }
-  if (!dipped) {
+  if (!tagged) {
     return {
       ...base, degraded, confirmed: false,
       reason: degraded
-        ? `Degrade: no single-bar pullback to ${dipBand} band`
-        : `No pullback to ${dipBand} band in last ${lookbackBars} bars`,
+        ? `Degrade: no single-bar tag of ${tagBand} band`
+        : `No ${tagBand}-band tag in last ${lookbackBars} bars`,
     };
   }
   return {
     ...base, degraded, confirmed: true,
     reason: degraded
-      ? "Degraded confirm: 15m bullish + single-bar 5m pullback-reclaim"
-      : `15m bullish + 5m pullback to ${dipBand} reclaimed ${reclaimBand} (last ${lookbackBars} bars)`,
+      ? "Degraded confirm: 15m bullish + single-bar 5m upper-band tag above floor"
+      : `15m bullish + 5m tagged ${tagBand} band (last ${lookbackBars} bars), still above ${floorBand}`,
   };
 }
 
@@ -359,16 +361,16 @@ async function fetchMeridianIndicatorPayload(
   return payload;
 }
 
-// Cross-interval confirmation for the supertrend_bb_pullback composite entry. Fetches
+// Cross-interval confirmation for the supertrend_bb_extension composite entry. Fetches
 // 5m (bands + veto) and 15m (trend filter) payloads and evaluates them together — the
 // per-interval loop in confirmIndicatorPreset can't express "different conditions per
 // interval". Returns the standard confirmation shape so executor/screener consumers and
 // the maxEntryRsi veto keep working unchanged.
-async function confirmSupertrendBbPullback({ mint, refresh = false }) {
+async function confirmSupertrendBbExtension({ mint, refresh = false }) {
   const params = {
-    lookbackBars: Number(config.indicators.pullbackLookbackBars) || 8,
-    dipBand: String(config.indicators.pullbackDipBand || "lower").toLowerCase(),
-    reclaimBand: String(config.indicators.pullbackReclaimBand || "middle").toLowerCase(),
+    lookbackBars: Number(config.indicators.extensionLookbackBars) || 3,
+    tagBand: String(config.indicators.extensionTagBand || "upper").toLowerCase(),
+    floorBand: String(config.indicators.extensionFloorBand || "middle").toLowerCase(),
   };
   const results = [];
   let p5 = null;
@@ -382,7 +384,7 @@ async function confirmSupertrendBbPullback({ mint, refresh = false }) {
         signal: buildSignalSummary(payload), latest: payload?.latest || null,
       });
     } catch (error) {
-      log("indicators_warn", `BB-pullback fetch failed for ${mint.slice(0, 8)} ${interval}: ${error.message}`);
+      log("indicators_warn", `BB-extension fetch failed for ${mint.slice(0, 8)} ${interval}: ${error.message}`);
       results.push({ interval, ok: false, confirmed: null, reason: error.message, signal: null, latest: null });
     }
   }
@@ -392,13 +394,13 @@ async function confirmSupertrendBbPullback({ mint, refresh = false }) {
   if (!p5 || !p15) {
     return {
       enabled: true, confirmed: true, skipped: true,
-      preset: "supertrend_bb_pullback", side: "entry",
+      preset: "supertrend_bb_extension", side: "entry",
       reason: "Indicator API unavailable; falling back to existing logic",
       intervals: results,
     };
   }
 
-  const evaln = evaluateSupertrendBbPullback(p5, p15, params);
+  const evaln = evaluateSupertrendBbExtension(p5, p15, params);
   for (const r of results) {
     if (!r.ok) continue;
     r.confirmed = r.interval === "15_MINUTE"
@@ -407,7 +409,7 @@ async function confirmSupertrendBbPullback({ mint, refresh = false }) {
   }
   return {
     enabled: true, confirmed: !!evaln.confirmed, skipped: false,
-    preset: "supertrend_bb_pullback", side: "entry",
+    preset: "supertrend_bb_extension", side: "entry",
     reason: evaln.reason, intervals: results,
   };
 }
@@ -423,8 +425,8 @@ export async function confirmIndicatorPreset({
     return { enabled: false, confirmed: true, reason: "Indicators disabled or not configured", intervals: [] };
   }
 
-  if (side === "entry" && preset === "supertrend_bb_pullback") {
-    return await confirmSupertrendBbPullback({ mint, refresh });
+  if (side === "entry" && preset === "supertrend_bb_extension") {
+    return await confirmSupertrendBbExtension({ mint, refresh });
   }
 
   const targets = normalizeIntervals(intervals);

@@ -268,6 +268,48 @@ test("fetchGmgnIndicatorPayload supertrend direction is invariant to where the s
   __setKlineFetcherForTest(null);
 });
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+const __testdir = dirname(fileURLToPath(import.meta.url));
+const cumFixture = JSON.parse(
+  readFileSync(join(__testdir, "../test/fixtures/cum-1m-klines-at-deploy.json"), "utf8"),
+);
+
+test("fetchGmgnIndicatorPayload: CUM 15m at deploy reads bearish, matching the GMGN chart", async () => {
+  // Regression for the seed/warmup-starvation false positive. CUM-SOL's last deploy
+  // (2026-06-01T03:07Z) passed the entry gate because the 15m warmup window seeded
+  // bullish, while GMGN's TradingView supertrend(10,3) read 0.0005067 with price BELOW
+  // it (bearish) on the same 10:00 UTC+7 bar. With sufficient warmup the agent's 15m
+  // converges to GMGN's value and the gate correctly rejects.
+  // Evidence + threshold: scripts/sweep-warmup-parity.js.
+  __clearKlineCacheForTest();
+  __setKlineFetcherForTest(async () => cumFixture.klines);
+  const pl = await fetchGmgnIndicatorPayload(cumFixture.mint, { interval: "15_MINUTE", rsiLength: 2 });
+  __setKlineFetcherForTest(null);
+
+  const { candle, supertrend } = pl.latest;
+  assert.equal(supertrend.direction, "bearish",
+    "15m supertrend must match GMGN's bearish read at the deploy bar");
+  assert.ok(candle.close < supertrend.value,
+    `price (${candle.close}) must sit below supertrend (${supertrend.value}) → gate rejects`);
+  // Parity: the converged value matches the GMGN chart (0.0005067) within tolerance.
+  const drift = Math.abs(supertrend.value - cumFixture.gmgn15mSupertrend) / cumFixture.gmgn15mSupertrend;
+  assert.ok(drift < 0.05,
+    `agent 15m ST ${supertrend.value} should track GMGN's ${cumFixture.gmgn15mSupertrend} (drift ${(drift * 100).toFixed(2)}%)`);
+});
+
+test("fetchGmgnIndicatorPayload: CUM 5m at deploy stays bullish (fix is surgical, not over-rejecting)", async () => {
+  // The warmup bump targets the 15m starvation only. The 5m had ample bars and agreed
+  // with the chart at every warmup; it must remain bullish so the stricter gate does not
+  // start rejecting genuinely-bullish 5m structure.
+  __clearKlineCacheForTest();
+  __setKlineFetcherForTest(async () => cumFixture.klines);
+  const pl = await fetchGmgnIndicatorPayload(cumFixture.mint, { interval: "5_MINUTE", rsiLength: 2 });
+  __setKlineFetcherForTest(null);
+  assert.equal(pl.latest.supertrend.direction, "bullish");
+});
+
 test("fetchGmgnIndicatorPayload throws when the feed returns too few candles", async () => {
   __clearKlineCacheForTest();
   __setKlineFetcherForTest(async () => fakeKlines(3));

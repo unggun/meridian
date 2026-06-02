@@ -113,7 +113,7 @@ Before `deploy_position` executes:
 - No duplicate pool allowed (same pool_address)
 - No duplicate base token allowed (same base_mint in another pool)
 - Deploy amount must include positive SOL (`amount_y` or `amount_sol`)
-- Range width must be at least the configured safe bins floor (`minBinsBelow`, never below 35)
+- Range width must be at least the configured safe bins floor (`minBinsBelow`, never below `MIN_SAFE_BINS_BELOW` in config.js — currently 16)
 - Single-side SOL deploys must keep `bins_above=0`
 - SOL balance must cover `amount_y + gasReserve`
 - `blockedLaunchpads` enforced in `getTopCandidates()` before LLM sees candidates
@@ -122,7 +122,7 @@ Before `deploy_position` executes:
 
 ## bins_below Calculation (SCREENER)
 
-Linear formula based on pool volatility (set in screener prompt, `index.js`). The lower/upper bounds are configurable, with a hard safety floor of 35 bins:
+Linear formula based on pool volatility (set in screener prompt, `index.js`). The lower/upper bounds are configurable, with a hard safety floor set by `MIN_SAFE_BINS_BELOW` in config.js (currently 16):
 
 ```
 bins_below = round(minBinsBelow + (volatility / 5) * (maxBinsBelow - minBinsBelow))

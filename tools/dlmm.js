@@ -675,6 +675,15 @@ export async function deployPosition({
       `Invalid deploy range: total bins ${totalBins} is below minimum ${minBinsBelow}. Refusing 1-bin/tiny-range deploy.`,
     );
   }
+  // Hard cap: the wide-range path (>69 bins) uses createExtendedEmptyPosition + addLiquidityByStrategyChunkable,
+  // which can fail Phase 2 with InvalidBinArray and leave an empty position on-chain leaking rent. Keep deploys
+  // on the atomic ≤69-bin path until that SDK behavior is trusted again.
+  const maxBinsBelow = Number(config.strategy.maxBinsBelow ?? 69);
+  if (activeBinsBelow > maxBinsBelow) {
+    throw new Error(
+      `Invalid bin range: bins_below ${activeBinsBelow} exceeds maxBinsBelow ${maxBinsBelow}. Pick a value within the configured clamp.`,
+    );
+  }
 
   const strategyMap = {
     spot: StrategyType.Spot,
@@ -909,19 +918,36 @@ export async function deployPosition({
       }
 
       // Phase 2: Add liquidity (may be multiple txs)
-      const addTxs = await pool.addLiquidityByStrategyChunkable({
-        positionPubKey: newPosition.publicKey,
-        user: wallet.publicKey,
-        totalXAmount: totalXLamports,
-        totalYAmount: totalYLamports,
-        strategy: { minBinId, maxBinId, strategyType },
-        slippage: 10, // 10%
-      });
-      const addTxArray = Array.isArray(addTxs) ? addTxs : [addTxs];
-      for (let i = 0; i < addTxArray.length; i++) {
-        const txHash = await sendAndConfirmTransaction(getConnection(), addTxArray[i], [wallet]);
-        txHashes.push(txHash);
-        log("deploy", `Add liquidity tx ${i + 1}/${addTxArray.length}: ${txHash}`);
+      // If this fails after Phase 1 succeeded, the empty position is on-chain holding rent;
+      // roll it back via pool.closePosition() so we don't leak rent on every failed wide deploy.
+      try {
+        const addTxs = await pool.addLiquidityByStrategyChunkable({
+          positionPubKey: newPosition.publicKey,
+          user: wallet.publicKey,
+          totalXAmount: totalXLamports,
+          totalYAmount: totalYLamports,
+          strategy: { minBinId, maxBinId, strategyType },
+          slippage: 10, // 10%
+        });
+        const addTxArray = Array.isArray(addTxs) ? addTxs : [addTxs];
+        for (let i = 0; i < addTxArray.length; i++) {
+          const txHash = await sendAndConfirmTransaction(getConnection(), addTxArray[i], [wallet]);
+          txHashes.push(txHash);
+          log("deploy", `Add liquidity tx ${i + 1}/${addTxArray.length}: ${txHash}`);
+        }
+      } catch (phase2Error) {
+        log("deploy_error", `Phase 2 add-liquidity failed: ${phase2Error.message}. Rolling back empty position ${newPosition.publicKey.toString()}.`);
+        try {
+          const rollbackTx = await pool.closePosition({
+            owner: wallet.publicKey,
+            position: { publicKey: newPosition.publicKey },
+          });
+          const rollbackHash = await sendAndConfirmTransaction(getConnection(), rollbackTx, [wallet]);
+          log("deploy_rollback", `Closed empty position after Phase 2 failure: ${rollbackHash}`);
+        } catch (rollbackError) {
+          log("deploy_rollback_error", `Failed to close empty position ${newPosition.publicKey.toString()}: ${rollbackError.message}. Rent (~0.062 SOL) is locked until manually closed.`);
+        }
+        throw phase2Error;
       }
     } else {
       // ── Standard Path (≤69 bins) ─────────────────────────────────

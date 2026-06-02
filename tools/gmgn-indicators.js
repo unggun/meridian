@@ -231,17 +231,26 @@ export const DEFAULT_INDICATOR_PARAMS = {
   fibLookbackBars: 55,
   klineCacheTtlSec: 30,
   // How many 1m candles to fetch per mint. Must give the COARSEST interval enough
-  // warmup after resampling: 900 → 60×15m bars (and 180×5m), comfortably above the
-  // BB-20 / ST-10 windows. 300 (≈20×15m) starved 15m and made it disagree with the
-  // Meridian feed. GMGN honors limits well above 300 in a single call.
-  klineLimit: 900,
+  // warmup after resampling. GMGN hard-caps a single token_kline call at ~1000 1m bars
+  // (verified: requesting 5000 returns 1000), i.e. ~66 closed 15m bars (~17h) — the
+  // ceiling for 15m parity. Fetch the full 1000 so the 15m warmup below can be filled.
+  // (900 yielded only ~60 closed 15m bars, just inside the seed-flap zone.)
+  klineLimit: 1000,
   // Anchor the indicator window to a FIXED number of most-recent CLOSED resampled bars.
   // The 1m fetch is a sliding window, so without this the oldest bar (and thus the
   // supertrend seed) moved every refresh and could flip direction at the same instant.
   // Pinning to the last N closed buckets makes the seed advance only when a bar actually
-  // closes — one controlled step, never per-fetch jitter. Must exceed BB-20 / ST-10 and
-  // stay below the coarsest interval's available closed bars (15m: ~59 from a 900 window).
-  warmupBars: 50,
+  // closes — one controlled step, never per-fetch jitter.
+  //
+  // VALUE (66, not 50): the supertrend seed only washes out once the window contains the
+  // last trend-defining band cross. On range-bound tokens a 50-bar 15m window (~12.5h) can
+  // miss it and report the seed's guess instead of the true carried state — CUM-SOL's last
+  // deploy seeded bullish at 50 bars while GMGN's TradingView ST read bearish (price below
+  // 0.0005067). Convergence to GMGN is non-monotonic and only stabilizes from ~58 bars up,
+  // so anchor to 66 — essentially all bars a 1000-kline fetch yields for 15m, safely clear
+  // of the flap zone. See scripts/sweep-warmup-parity.js and the CUM 15m regression in
+  // gmgn-indicators.test.js.
+  warmupBars: 66,
 };
 
 function indicatorParams() {

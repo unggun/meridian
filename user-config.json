@@ -51,7 +51,7 @@
     "rsiOverbought": 90,
     "requireAllIntervals": true,
     "maxEntryRsi": null,
-    "pullbackLookbackBars": 8,
+    "pullbackLookbackBars": 3,
     "pullbackDipBand": "lower",
     "pullbackReclaimBand": "middle",
     "supertrendExitEnabled": true,

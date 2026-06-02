@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resampleKlines } from "./gmgn-indicators.js";
+import { resampleKlines, computeIndicators, DEFAULT_INDICATOR_PARAMS } from "./gmgn-indicators.js";
 
 // Helper: build a 1m candle. time in ms.
 const c = (time, open, high, low, close, volume) => ({ time, open, high, low, close, volume });
@@ -167,8 +167,6 @@ test("computeSupertrend seeds direction from price on a short declining series",
   const st = computeSupertrend(candles, period, 3);
   assert.equal(st.direction, "bearish", "first evaluated bar closes below its HL2 mid → bearish seed");
 });
-import { computeIndicators } from "./gmgn-indicators.js";
-
 function syntheticCandles(n) {
   const out = [];
   for (let i = 0; i < n; i++) {
@@ -340,4 +338,21 @@ test("fetchGmgnIndicatorPayload does not cache a transient empty kline list", as
   assert.ok(payload.latest.supertrend.value > 0);
 
   __setKlineFetcherForTest(null);
+});
+
+test("computeIndicators emits a recent series with close/low/bbLower/bbMiddle", () => {
+  // 30 ascending candles so bollinger/supertrend/rsi are all computable.
+  const candles = Array.from({ length: 30 }, (_, i) => ({
+    time: ALIGNED_5M + i * 5 * min,
+    open: 100 + i, high: 102 + i, low: 98 + i, close: 100 + i,
+  }));
+  const params = { ...DEFAULT_INDICATOR_PARAMS, recentSeriesBars: 6, rsiLength: 2 };
+  const payload = computeIndicators(candles, params);
+  assert.ok(Array.isArray(payload.recent), "recent should be an array");
+  assert.equal(payload.recent.length, 6);
+  const last = payload.recent[payload.recent.length - 1];
+  assert.equal(last.close, 129);
+  assert.equal(last.low, 127);
+  assert.ok(Number.isFinite(last.bbLower), "bbLower finite");
+  assert.ok(Number.isFinite(last.bbMiddle), "bbMiddle finite");
 });

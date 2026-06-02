@@ -91,6 +91,28 @@ export function computeBollinger(closes, period = 20, stdDevMult = 2) {
   };
 }
 
+// Per-bar Bollinger lower/middle (plus close/low) for the last `n` candles.
+// Each band is computed over the trailing `period` closes ending at that bar, so the
+// series is non-repainting. Used to detect a pullback to a band across a window of
+// recently CLOSED bars. Bars without enough history get null bands.
+export function buildRecentSeries(candles, params, n) {
+  const out = [];
+  if (!Array.isArray(candles) || candles.length === 0) return out;
+  const count = Math.max(1, Math.floor(n) || 1);
+  const start = Math.max(0, candles.length - count);
+  for (let i = start; i < candles.length; i++) {
+    const closesUpToI = candles.slice(0, i + 1).map((c) => c.close);
+    const bb = computeBollinger(closesUpToI, params.bollingerPeriod, params.bollingerStdDev);
+    out.push({
+      close: candles[i].close,
+      low: candles[i].low,
+      bbLower: bb ? bb.lower : null,
+      bbMiddle: bb ? bb.middle : null,
+    });
+  }
+  return out;
+}
+
 // ATR-based Supertrend over OHLC candles (ascending by time).
 // Returns { value, direction, breakUp, breakDown } for the final candle, or null.
 // direction: "bullish" | "bearish". breakUp/breakDown = direction flipped on the
@@ -217,6 +239,7 @@ export function computeIndicators(candles, params) {
       },
       fibonacci: computeFibonacci(candles, params.fibLookbackBars),
     },
+    recent: buildRecentSeries(candles, params, params.recentSeriesBars || 16),
   };
 }
 
@@ -251,6 +274,11 @@ export const DEFAULT_INDICATOR_PARAMS = {
   // of the flap zone. See scripts/sweep-warmup-parity.js and the CUM 15m regression in
   // gmgn-indicators.test.js.
   warmupBars: 66,
+  // How many most-recent CLOSED bars to expose in the payload's `recent` series.
+  // Consumed by the supertrend_bb_pullback entry preset to detect a pullback across a
+  // window of closed bars (a durable signal, vs a single-bar event that the 30-min
+  // screener would usually miss). Keep >= the largest expected pullbackLookbackBars.
+  recentSeriesBars: 16,
 };
 
 function indicatorParams() {

@@ -142,6 +142,38 @@ test("bb-pullback: dip outside lookback window → reject", () => {
   assert.match(r.reason, /pullback/i);
 });
 
+test("confirmIndicatorPreset bb-pullback fails closed (skipped) when fetches error", async () => {
+  const prev = {
+    src: config.gmgn.indicatorSource,
+    en: config.indicators.enabled,
+    ep: config.indicators.entryPreset,
+  };
+  config.gmgn.indicatorSource = "gmgn";
+  config.indicators.enabled = true;
+  config.indicators.entryPreset = "supertrend_bb_pullback";
+
+  __clearKlineCacheForTest();
+  __setKlineFetcherForTest(async () => { throw new Error("simulated GMGN outage"); });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 503, async text() { return ""; } });
+
+  try {
+    const res = await confirmIndicatorPreset({ mint: "MINTERR", side: "entry", refresh: true });
+    assert.equal(res.preset, "supertrend_bb_pullback");
+    assert.equal(res.skipped, true);
+    assert.equal(res.confirmed, true); // fail-open here → executor fails closed on `skipped`
+    assert.equal(res.intervals.length, 2);
+    assert.ok(res.intervals.every((i) => i.ok === false));
+  } finally {
+    globalThis.fetch = realFetch;
+    __setKlineFetcherForTest(null);
+    __clearKlineCacheForTest();
+    config.gmgn.indicatorSource = prev.src;
+    config.indicators.enabled = prev.en;
+    config.indicators.entryPreset = prev.ep;
+  }
+});
+
 test("confirmIndicatorPreset routes supertrend_bb_pullback through the composite (degrade path)", async () => {
   const prev = {
     src: config.gmgn.indicatorSource,

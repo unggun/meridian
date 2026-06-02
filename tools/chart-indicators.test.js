@@ -119,6 +119,16 @@ test("bb-pullback: degrade path (no recent) uses single-bar check → confirm", 
   assert.equal(r.degraded, true);
 });
 
+test("bb-pullback: degrade path (no recent), no single-bar dip → reject", () => {
+  // low=102 > lower=95: no dip on the single bar
+  const r = evaluateSupertrendBbPullback(
+    mk5({ close: 105, low: 102, lower: 95, middle: 100, st: 95 }),
+    mk15("bullish"), PARAMS);
+  assert.equal(r.confirmed, false);
+  assert.equal(r.degraded, true);
+  assert.match(r.reason, /degrade/i);
+});
+
 test("bb-pullback: dip outside lookback window → reject", () => {
   const recent = [
     { close: 101, low: 90, bbLower: 95, bbMiddle: 100 }, // dip, but oldest

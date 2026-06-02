@@ -269,8 +269,8 @@ export function evaluateSupertrendBbPullback(payload5m, payload15m, params) {
   let dipped = false;
   let degraded = false;
   if (recent && recent.length > 0) {
-    const window = recent.slice(-lookbackBars);
-    dipped = window.some((bar) => {
+    const lookbackWindow = recent.slice(-lookbackBars);
+    dipped = lookbackWindow.some((bar) => {
       const level = dipBand === "middle" ? bar.bbMiddle : bar.bbLower;
       return level != null && bar.low != null && bar.low <= level;
     });
@@ -278,7 +278,8 @@ export function evaluateSupertrendBbPullback(payload5m, payload15m, params) {
     // Degrade: no series (meridian fallback) → single-bar check on the latest 5m bar.
     degraded = true;
     const dipLevel = dipBand === "middle" ? s5.middleBand : s5.lowerBand;
-    const low5 = safeNum(payload5m?.latest?.candle?.low) ?? s5.close;
+    const rawLow = payload5m?.latest?.candle?.low;
+    const low5 = rawLow != null ? safeNum(rawLow) : s5.close;
     dipped = dipLevel != null && low5 != null && low5 <= dipLevel;
   }
   if (!dipped) {

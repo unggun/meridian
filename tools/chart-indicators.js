@@ -236,6 +236,67 @@ function evaluatePreset(side, preset, payload) {
   }
 }
 
+// Pure decision for the supertrend_bb_pullback composite entry (no I/O).
+// payload5m / payload15m: { latest, recent? } payloads. params is pre-coerced:
+//   { lookbackBars:number, dipBand:"lower"|"middle", reclaimBand:"middle"|"lower" }.
+// Thesis: 15m supertrend bullish (trend filter) + a 5m pullback to a band within the
+// last N closed bars that has reclaimed back above the reclaim band now (timing), with
+// the standard close>=supertrend veto. Degrades to a single-bar check when no `recent`
+// series is present (meridian fallback). Returns { confirmed, reason, signal5m, signal15m, degraded }.
+export function evaluateSupertrendBbPullback(payload5m, payload15m, params) {
+  const s5 = buildSignalSummary(payload5m);
+  const s15 = buildSignalSummary(payload15m);
+  const lookbackBars = Math.max(1, Math.floor(params.lookbackBars) || 8);
+  const dipBand = params.dipBand === "middle" ? "middle" : "lower";
+  const reclaimBand = params.reclaimBand === "lower" ? "lower" : "middle";
+  const base = { signal5m: s5, signal15m: s15, degraded: false };
+
+  // 1. HTF trend filter — 15m supertrend must be bullish.
+  if (s15.supertrendDirection !== "bullish") {
+    return { ...base, confirmed: false, reason: `15m supertrend ${s15.supertrendDirection} (need bullish)` };
+  }
+  // 2. Defensive veto — 5m close must be at/above its supertrend.
+  if (s5.close != null && s5.supertrendValue != null && s5.close < s5.supertrendValue) {
+    return { ...base, confirmed: false, reason: `Veto: 5m close ${s5.close} < supertrend ${s5.supertrendValue}` };
+  }
+  // 3. Reclaim — latest 5m close back above the reclaim band.
+  const reclaimLevel = reclaimBand === "lower" ? s5.lowerBand : s5.middleBand;
+  if (s5.close == null || reclaimLevel == null || s5.close < reclaimLevel) {
+    return { ...base, confirmed: false, reason: `No reclaim: 5m close ${s5.close} < ${reclaimBand} band ${reclaimLevel}` };
+  }
+  // 4. Pullback — a dip to the dip band within the lookback window.
+  const recent = Array.isArray(payload5m?.recent) ? payload5m.recent : null;
+  let dipped = false;
+  let degraded = false;
+  if (recent && recent.length > 0) {
+    const window = recent.slice(-lookbackBars);
+    dipped = window.some((bar) => {
+      const level = dipBand === "middle" ? bar.bbMiddle : bar.bbLower;
+      return level != null && bar.low != null && bar.low <= level;
+    });
+  } else {
+    // Degrade: no series (meridian fallback) → single-bar check on the latest 5m bar.
+    degraded = true;
+    const dipLevel = dipBand === "middle" ? s5.middleBand : s5.lowerBand;
+    const low5 = safeNum(payload5m?.latest?.candle?.low) ?? s5.close;
+    dipped = dipLevel != null && low5 != null && low5 <= dipLevel;
+  }
+  if (!dipped) {
+    return {
+      ...base, degraded, confirmed: false,
+      reason: degraded
+        ? `Degrade: no single-bar pullback to ${dipBand} band`
+        : `No pullback to ${dipBand} band in last ${lookbackBars} bars`,
+    };
+  }
+  return {
+    ...base, degraded, confirmed: true,
+    reason: degraded
+      ? "Degraded confirm: 15m bullish + single-bar 5m pullback-reclaim"
+      : `15m bullish + 5m pullback to ${dipBand} reclaimed ${reclaimBand} (last ${lookbackBars} bars)`,
+  };
+}
+
 // Fetch one interval and evaluate a single preset, independent of the global
 // `config.indicators.enabled` gate. The caller decides whether to invoke this.
 // Returns { confirmed, reason, signal } from evaluatePreset.

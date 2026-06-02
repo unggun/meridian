@@ -911,8 +911,10 @@ async function runSafetyChecks(name, args) {
 
           // Independent RSI ceiling — block deploys into overbought conditions
           // even when the preset confirms (entry-side veto, reuses same payload).
+          // `> 0` so null/0 (Number(null)===0) cleanly disables the ceiling rather
+          // than vetoing every entry (RSI >= 0 is always true).
           const maxEntryRsi = Number(config.indicators.maxEntryRsi);
-          if (Number.isFinite(maxEntryRsi) && confirmation?.intervals?.length) {
+          if (Number.isFinite(maxEntryRsi) && maxEntryRsi > 0 && confirmation?.intervals?.length) {
             const overbought = confirmation.intervals
               .filter((i) => i.ok && i.signal?.rsi != null && Number(i.signal.rsi) >= maxEntryRsi)
               .sort((a, b) => Number(b.signal.rsi) - Number(a.signal.rsi))[0];

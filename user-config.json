@@ -40,7 +40,7 @@
   "generalModel": "MiniMax-M2.7",
   "chartIndicators": {
     "enabled": true,
-    "entryPreset": "supertrend_bb_pullback",
+    "entryPreset": "supertrend_bb_extension",
     "exitPreset": "bb_plus_rsi",
     "rsiLength": 2,
     "intervals": [
@@ -51,9 +51,9 @@
     "rsiOverbought": 90,
     "requireAllIntervals": true,
     "maxEntryRsi": null,
-    "pullbackLookbackBars": 3,
-    "pullbackDipBand": "lower",
-    "pullbackReclaimBand": "middle",
+    "extensionLookbackBars": 3,
+    "extensionTagBand": "upper",
+    "extensionFloorBand": "middle",
     "supertrendExitEnabled": true,
     "supertrendExitInterval": "15_MINUTE"
   },

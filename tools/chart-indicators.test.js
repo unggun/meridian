@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 // We test the dispatcher's fallback by pointing the GMGN path at a fetcher that throws,
 // and stubbing the Meridian fetch via a global fetch override.
-import { fetchChartIndicatorsForMint, evaluateSupertrendBbPullback } from "./chart-indicators.js";
+import { fetchChartIndicatorsForMint, evaluateSupertrendBbPullback, confirmIndicatorPreset } from "./chart-indicators.js";
 import { __setKlineFetcherForTest, __clearKlineCacheForTest } from "./gmgn-indicators.js";
 import { config } from "../config.js";
 
@@ -140,4 +140,49 @@ test("bb-pullback: dip outside lookback window → reject", () => {
     mk15("bullish"), { lookbackBars: 2, dipBand: "lower", reclaimBand: "middle" });
   assert.equal(r.confirmed, false);
   assert.match(r.reason, /pullback/i);
+});
+
+test("confirmIndicatorPreset routes supertrend_bb_pullback through the composite (degrade path)", async () => {
+  const prev = {
+    src: config.gmgn.indicatorSource,
+    en: config.indicators.enabled,
+    ep: config.indicators.entryPreset,
+    lb: config.indicators.pullbackLookbackBars,
+    db: config.indicators.pullbackDipBand,
+    rb: config.indicators.pullbackReclaimBand,
+  };
+  config.gmgn.indicatorSource = "meridian"; // no `recent` → exercise degrade + routing
+  config.indicators.enabled = true;
+  config.indicators.entryPreset = "supertrend_bb_pullback";
+  config.indicators.pullbackLookbackBars = 6;
+  config.indicators.pullbackDipBand = "lower";
+  config.indicators.pullbackReclaimBand = "middle";
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => ({
+    ok: true,
+    async text() {
+      const is15 = String(url).includes("15_MINUTE");
+      return JSON.stringify(is15
+        ? { latest: { candle: { close: 100, low: 99 }, supertrend: { value: 90, direction: "bullish" }, bollinger: { lower: 80, middle: 90, upper: 100 }, rsi: { value: 50 } } }
+        : { latest: { candle: { close: 105, low: 95 }, supertrend: { value: 95, direction: "bullish" }, bollinger: { lower: 95, middle: 100, upper: 110 }, rsi: { value: 50 } } });
+    },
+  });
+  try {
+    const res = await confirmIndicatorPreset({ mint: "MINTZ", side: "entry", refresh: true });
+    assert.equal(res.preset, "supertrend_bb_pullback");
+    assert.equal(res.confirmed, true);
+    assert.equal(res.enabled, true);
+    assert.equal(res.skipped, false);
+    assert.equal(res.intervals.length, 2);
+    assert.ok(res.intervals.every((i) => i.ok));
+  } finally {
+    globalThis.fetch = realFetch;
+    config.gmgn.indicatorSource = prev.src;
+    config.indicators.enabled = prev.en;
+    config.indicators.entryPreset = prev.ep;
+    config.indicators.pullbackLookbackBars = prev.lb;
+    config.indicators.pullbackDipBand = prev.db;
+    config.indicators.pullbackReclaimBand = prev.rb;
+  }
 });

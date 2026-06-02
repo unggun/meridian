@@ -359,6 +359,59 @@ async function fetchMeridianIndicatorPayload(
   return payload;
 }
 
+// Cross-interval confirmation for the supertrend_bb_pullback composite entry. Fetches
+// 5m (bands + veto) and 15m (trend filter) payloads and evaluates them together — the
+// per-interval loop in confirmIndicatorPreset can't express "different conditions per
+// interval". Returns the standard confirmation shape so executor/screener consumers and
+// the maxEntryRsi veto keep working unchanged.
+async function confirmSupertrendBbPullback({ mint, refresh = false }) {
+  const params = {
+    lookbackBars: Number(config.indicators.pullbackLookbackBars) || 8,
+    dipBand: String(config.indicators.pullbackDipBand || "lower").toLowerCase(),
+    reclaimBand: String(config.indicators.pullbackReclaimBand || "middle").toLowerCase(),
+  };
+  const results = [];
+  let p5 = null;
+  let p15 = null;
+  for (const interval of ["5_MINUTE", "15_MINUTE"]) {
+    try {
+      const payload = await fetchChartIndicatorsForMint(mint, { interval, refresh });
+      if (interval === "5_MINUTE") p5 = payload; else p15 = payload;
+      results.push({
+        interval, ok: true, confirmed: null, reason: null,
+        signal: buildSignalSummary(payload), latest: payload?.latest || null,
+      });
+    } catch (error) {
+      log("indicators_warn", `BB-pullback fetch failed for ${mint.slice(0, 8)} ${interval}: ${error.message}`);
+      results.push({ interval, ok: false, confirmed: null, reason: error.message, signal: null, latest: null });
+    }
+  }
+
+  // Fail open like the generic path: if either interval is missing, mark skipped so the
+  // deploy-time check fails closed (executor.js) rather than committing capital blind.
+  if (!p5 || !p15) {
+    return {
+      enabled: true, confirmed: true, skipped: true,
+      preset: "supertrend_bb_pullback", side: "entry",
+      reason: "Indicator API unavailable; falling back to existing logic",
+      intervals: results,
+    };
+  }
+
+  const evaln = evaluateSupertrendBbPullback(p5, p15, params);
+  for (const r of results) {
+    if (!r.ok) continue;
+    r.confirmed = r.interval === "15_MINUTE"
+      ? evaln.signal15m.supertrendDirection === "bullish"
+      : evaln.confirmed;
+  }
+  return {
+    enabled: true, confirmed: !!evaln.confirmed, skipped: false,
+    preset: "supertrend_bb_pullback", side: "entry",
+    reason: evaln.reason, intervals: results,
+  };
+}
+
 export async function confirmIndicatorPreset({
   mint,
   side,
@@ -368,6 +421,10 @@ export async function confirmIndicatorPreset({
 } = {}) {
   if (!config.indicators.enabled || !mint || !preset) {
     return { enabled: false, confirmed: true, reason: "Indicators disabled or not configured", intervals: [] };
+  }
+
+  if (side === "entry" && preset === "supertrend_bb_pullback") {
+    return await confirmSupertrendBbPullback({ mint, refresh });
   }
 
   const targets = normalizeIntervals(intervals);

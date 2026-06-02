@@ -225,6 +225,18 @@ interval of lag). As a second guard, chart-exit closes are **debounced** in inde
 `confirmChartExitDebounce` (state.js): a bearish signal must persist across two consecutive management
 cycles (`pending_chart_exit_since`) before closing, so a single artifact can't cut a fresh position.
 
+**Entry preset `supertrend_bb_pullback` (composite, cross-interval).** Confirms a deploy
+when the **15m supertrend is bullish** (HTF trend filter) AND price **pulled back to a
+Bollinger band and reclaimed it on 5m** within `indicators.pullbackLookbackBars` closed
+bars (default 8), with the standard `close >= supertrend` veto. Unlike other presets it
+evaluates two intervals together via `confirmSupertrendBbPullback` (tools/chart-indicators.js),
+bypassing the per-interval `intervals`/`requireAllIntervals` loop. The pullback is a
+*durable* window state (not a single-bar event) so it survives the 30-min screener
+cadence — size `pullbackLookbackBars` so `N*5min` exceeds the screening interval. The
+`recent` per-bar band series powering it comes from the GMGN path (`computeIndicators`);
+the meridian fallback has no series and **degrades to a single-bar pullback check**.
+Tune via `/setcfg pullbackLookbackBars|pullbackDipBand|pullbackReclaimBand`.
+
 ---
 
 ## Model Configuration

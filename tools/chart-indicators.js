@@ -421,7 +421,12 @@ export async function confirmIndicatorPreset({
   intervals = config.indicators.intervals,
   refresh = false,
 } = {}) {
-  if (!config.indicators.enabled || !mint || !preset) {
+  // A falsy or sentinel ("none"/"off"/"disabled") preset disables this side without
+  // touching `config.indicators.enabled` (which also gates the deploy-time entry gate).
+  // Short-circuits before any fetch, so a disabled side costs zero GMGN calls.
+  const presetDisabled =
+    !preset || ["none", "off", "disabled"].includes(String(preset).trim().toLowerCase());
+  if (!config.indicators.enabled || !mint || presetDisabled) {
     return { enabled: false, confirmed: true, reason: "Indicators disabled or not configured", intervals: [] };
   }
 

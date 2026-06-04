@@ -41,7 +41,7 @@
   "chartIndicators": {
     "enabled": true,
     "entryPreset": "supertrend_bb_extension",
-    "exitPreset": "bb_plus_rsi",
+    "exitPreset": "none",
     "rsiLength": 2,
     "intervals": [
       "5_MINUTE"

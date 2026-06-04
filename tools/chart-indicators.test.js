@@ -230,3 +230,24 @@ test("confirmIndicatorPreset routes supertrend_bb_extension through the composit
     config.indicators.extensionFloorBand = prev.fb;
   }
 });
+
+test("confirmIndicatorPreset disables a side via sentinel exitPreset (no fetch, enabled:false)", async () => {
+  const prev = { en: config.indicators.enabled, xp: config.indicators.exitPreset };
+  config.indicators.enabled = true; // entry gate stays live; only the exit side is sentinel-disabled
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("fetch must not be called for a disabled side"); };
+  __setKlineFetcherForTest(async () => { throw new Error("kline fetch must not be called for a disabled side"); });
+  try {
+    for (const sentinel of ["none", "off", "disabled", "", null]) {
+      config.indicators.exitPreset = sentinel;
+      const res = await confirmIndicatorPreset({ mint: "MINTX", side: "exit", refresh: true });
+      assert.equal(res.enabled, false, `sentinel ${JSON.stringify(sentinel)} should report enabled:false`);
+      // enabled:false means the underwater chart-exit block (index.js) never acts on it.
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    __setKlineFetcherForTest(null);
+    config.indicators.enabled = prev.en;
+    config.indicators.exitPreset = prev.xp;
+  }
+});

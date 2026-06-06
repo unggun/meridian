@@ -448,7 +448,15 @@ test("computeRsiSeries is candle-aligned and its final value matches computeRsi"
   const series = computeRsiSeries(closes, 2);
   assert.equal(series.length, closes.length);          // aligned to candles
   assert.equal(series[0], null);                        // no RSI before warmup
+  assert.equal(series[1], null, "no RSI at the second warmup slot either (length=2)");
+  assert.ok(series[2] !== null, "first RSI appears at index `length`");
+  assert.ok(Math.abs(series[2] - computeRsi(closes.slice(0, 3), 2)) < 1e-9, "intermediate slot matches prefix computeRsi");
   const pointwise = computeRsi(closes, 2);
   assert.ok(Math.abs(series[series.length - 1] - pointwise) < 1e-9,
     `series tail ${series[series.length - 1]} should equal point RSI ${pointwise}`);
+});
+
+test("computeRsiSeries returns all-null / empty for insufficient or non-array input", () => {
+  assert.deepEqual(computeRsiSeries([10, 11], 2), [null, null]);
+  assert.deepEqual(computeRsiSeries(null, 2), []);
 });

@@ -78,10 +78,12 @@ export function computeRsi(closes, length = 2) {
 }
 
 // Rolling Wilder RSI aligned to `closes` (one value per close; null before warmup).
-// series[i] uses the same Wilder smoothing as computeRsi, so series[last] === computeRsi(closes).
+// series[i] uses the same Wilder smoothing as computeRsi, so series[last] agrees with
+// computeRsi(closes) to floating-point precision.
 export function computeRsiSeries(closes, length = 2) {
-  const out = new Array(Array.isArray(closes) ? closes.length : 0).fill(null);
-  if (!Array.isArray(closes) || closes.length < length + 1) return out;
+  const len = Array.isArray(closes) ? closes.length : 0;
+  const out = new Array(len).fill(null);
+  if (len < length + 1) return out;
   let avgGain = 0;
   let avgLoss = 0;
   for (let i = 1; i <= length; i++) {

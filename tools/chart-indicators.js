@@ -347,6 +347,39 @@ export function evaluateSupertrendRollover(payload, params) {
   };
 }
 
+// Fetch the 15m payload and evaluate the rollover exit. Called DIRECTLY by index.js
+// (not via confirmIndicatorPreset) so it runs regardless of config.indicators.enabled —
+// matching the sibling supertrendExit path. Returns the standard confirmation shape.
+export async function confirmSupertrendRolloverExit({ mint, refresh = false } = {}) {
+  const params = {
+    rsiEnabled: config.indicators.rolloverRsi !== false,
+    macdEnabled: config.indicators.rolloverMacd !== false,
+    bbEnabled: config.indicators.rolloverBb !== false,
+    rsiUpper: Number(config.indicators.rolloverRsiUpper) || 90,
+  };
+  let payload;
+  try {
+    payload = await fetchChartIndicatorsForMint(mint, { interval: "15_MINUTE", refresh });
+  } catch (error) {
+    log("indicators_warn", `Rollover exit fetch failed for ${String(mint).slice(0, 8)}: ${error.message}`);
+    return {
+      enabled: true, confirmed: false, skipped: true,
+      preset: "supertrend_rollover_exit", side: "exit",
+      reason: `Fetch failed: ${error.message}`, intervals: [],
+    };
+  }
+  const evaln = evaluateSupertrendRollover(payload, params);
+  return {
+    enabled: true,
+    confirmed: !!evaln.confirmed && !evaln.skipped,
+    skipped: !!evaln.skipped,
+    preset: "supertrend_rollover_exit",
+    side: "exit",
+    reason: evaln.reason,
+    intervals: [{ interval: "15_MINUTE", ok: true, confirmed: !!evaln.confirmed, reason: evaln.reason, signal: evaln.signal, latest: payload?.latest || null }],
+  };
+}
+
 // Fetch one interval and evaluate a single preset, independent of the global
 // `config.indicators.enabled` gate. The caller decides whether to invoke this.
 // Returns { confirmed, reason, signal } from evaluatePreset.

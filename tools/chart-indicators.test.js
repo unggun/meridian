@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 // We test the dispatcher's fallback by pointing the GMGN path at a fetcher that throws,
 // and stubbing the Meridian fetch via a global fetch override.
-import { fetchChartIndicatorsForMint, evaluateSupertrendBbExtension, evaluateSupertrendRollover, confirmIndicatorPreset } from "./chart-indicators.js";
+import { fetchChartIndicatorsForMint, evaluateSupertrendBbExtension, evaluateSupertrendRollover, confirmSupertrendRolloverExit, confirmIndicatorPreset } from "./chart-indicators.js";
 import { __setKlineFetcherForTest, __clearKlineCacheForTest } from "./gmgn-indicators.js";
 import { config } from "../config.js";
 
@@ -322,4 +322,34 @@ test("rollover: missing recent series degrades to skipped (no exit)", () => {
   const r = evaluateSupertrendRollover(mkRollover({ direction: "bearish", recent: undefined }), ALL);
   assert.equal(r.confirmed, false);
   assert.equal(r.skipped, true);
+});
+
+test("confirmSupertrendRolloverExit returns skipped when payload has no recent series", async () => {
+  const prevSource = config.gmgn.indicatorSource;
+  config.gmgn.indicatorSource = "meridian"; // meridian payload has no `recent` → degrade path
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    async text() {
+      return JSON.stringify({
+        latest: {
+          candle: { close: 100 },
+          previousCandle: { close: 100 },
+          rsi: { value: 50 },
+          bollinger: { upper: 110, middle: 100, lower: 90 },
+          supertrend: { value: 105, direction: "bearish" },
+          states: {},
+        },
+      });
+    },
+  });
+  try {
+    const r = await confirmSupertrendRolloverExit({ mint: "MINTROLL" });
+    assert.equal(r.skipped, true);
+    assert.equal(r.confirmed, false);
+    assert.equal(r.preset, "supertrend_rollover_exit");
+  } finally {
+    globalThis.fetch = realFetch;
+    config.gmgn.indicatorSource = prevSource;
+  }
 });

@@ -491,3 +491,19 @@ test("computeMacd returns a candle-aligned histogram series with a first-green c
 test("computeMacd returns null when there is insufficient data", () => {
   assert.equal(computeMacd([1, 2, 3], { fast: 12, slow: 26, signal: 9 }), null);
 });
+
+test("computeIndicators enriches recent with rsi + macdHist and exposes latest.macd", () => {
+  const base = ALIGNED_15M;
+  // 80 candles with enough variation for RSI/MACD to be defined.
+  const candles = Array.from({ length: 80 }, (_, i) => {
+    const close = 100 + Math.sin(i / 3) * 6 + i * 0.15;
+    return c(base + i * 15 * min, close, close + 1.5, close - 1.5, close, 100);
+  });
+  const params = { ...DEFAULT_INDICATOR_PARAMS, rsiLength: 2 };
+  const out = computeIndicators(candles, params);
+  assert.ok(Array.isArray(out.recent) && out.recent.length > 0);
+  const lastBar = out.recent[out.recent.length - 1];
+  assert.ok("rsi" in lastBar && "macdHist" in lastBar, "recent bars must carry rsi + macdHist");
+  assert.ok(Number.isFinite(lastBar.rsi), "trailing rsi should be finite");
+  assert.ok(out.latest.macd && Number.isFinite(out.latest.macd.histogram), "latest.macd present");
+});

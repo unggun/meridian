@@ -165,15 +165,20 @@ export function computeBollinger(closes, period = 20, stdDevMult = 2) {
   };
 }
 
-// Per-bar Bollinger bands (plus close/high/low) for the last `n` candles. Each band is
-// computed over the trailing `period` closes ending at that bar, so the series is
-// non-repainting. Used to detect band interactions across a window of recently CLOSED
-// bars — a lower-band dip OR an upper-band tag. Bars without enough history get null bands.
-export function buildRecentSeries(candles, params, n) {
+// Per-bar Bollinger bands (plus close/high/low/rsi/macdHist) for the last `n` candles.
+// Each band is computed over the trailing `period` closes ending at that bar, so the
+// series is non-repainting. Used to detect band interactions across a window of recently
+// CLOSED bars — a lower-band dip OR an upper-band tag. Bars without enough history get
+// null bands. Optional 4th arg `series` carries candle-aligned arrays for rsi/macdHist
+// (produced by computeRsiSeries / computeMacd.histogramSeries), attached per bar so
+// consumers can read per-bar RSI and MACD histogram without recomputing.
+export function buildRecentSeries(candles, params, n, series = {}) {
   const out = [];
   if (!Array.isArray(candles) || candles.length === 0) return out;
   const count = Math.max(0, Number.isFinite(n) ? Math.floor(n) : 1);
   if (count === 0) return out;
+  const rsiSeries = Array.isArray(series.rsiSeries) ? series.rsiSeries : null;
+  const macdHistSeries = Array.isArray(series.macdHistSeries) ? series.macdHistSeries : null;
   const start = Math.max(0, candles.length - count);
   for (let i = start; i < candles.length; i++) {
     const closesUpToI = candles.slice(0, i + 1).map((c) => c.close);
@@ -185,6 +190,8 @@ export function buildRecentSeries(candles, params, n) {
       bbLower: bb ? bb.lower : null,
       bbMiddle: bb ? bb.middle : null,
       bbUpper: bb ? bb.upper : null,
+      rsi: rsiSeries ? rsiSeries[i] ?? null : null,
+      macdHist: macdHistSeries ? macdHistSeries[i] ?? null : null,
     });
   }
   return out;
@@ -301,6 +308,9 @@ export function computeIndicators(candles, params) {
   if (!supertrend || !bollinger || rsi == null) {
     throw new Error("insufficient kline data for indicators");
   }
+  // MACD is best-effort: null when history is short → triggers that need it simply don't fire.
+  const rsiSeries = computeRsiSeries(closes, params.rsiLength);
+  const macd = computeMacd(closes, { fast: params.macdFast, slow: params.macdSlow, signal: params.macdSignal });
   const last = candles[candles.length - 1];
   const prev = candles[candles.length - 2];
   return {
@@ -308,6 +318,7 @@ export function computeIndicators(candles, params) {
       candle: { open: last.open, high: last.high, low: last.low, close: last.close },
       previousCandle: { close: prev.close },
       rsi: { value: rsi },
+      macd: macd ? { macd: macd.macd, signal: macd.signal, histogram: macd.histogram } : null,
       bollinger: { upper: bollinger.upper, middle: bollinger.middle, lower: bollinger.lower },
       supertrend: { value: supertrend.value, direction: supertrend.direction },
       states: {
@@ -316,7 +327,10 @@ export function computeIndicators(candles, params) {
       },
       fibonacci: computeFibonacci(candles, params.fibLookbackBars),
     },
-    recent: buildRecentSeries(candles, params, params.recentSeriesBars || 16),
+    recent: buildRecentSeries(candles, params, params.recentSeriesBars || 16, {
+      rsiSeries,
+      macdHistSeries: macd ? macd.histogramSeries : null,
+    }),
   };
 }
 
@@ -328,6 +342,9 @@ export const DEFAULT_INDICATOR_PARAMS = {
   supertrendMultiplier: 3,
   bollingerPeriod: 20,
   bollingerStdDev: 2,
+  macdFast: 12,
+  macdSlow: 26,
+  macdSignal: 9,
   fibLookbackBars: 55,
   klineCacheTtlSec: 30,
   // How many 1m candles to fetch per mint. Must give the COARSEST interval enough

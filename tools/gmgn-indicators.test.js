@@ -460,3 +460,24 @@ test("computeRsiSeries returns all-null / empty for insufficient or non-array in
   assert.deepEqual(computeRsiSeries([10, 11], 2), [null, null]);
   assert.deepEqual(computeRsiSeries(null, 2), []);
 });
+
+test("computeMacd returns a candle-aligned histogram series with a first-green crossover", () => {
+  // Down-leg then up-leg: the histogram must cross from <=0 to >0 during the up-leg.
+  const down = Array.from({ length: 40 }, (_, i) => 100 - i);     // 100..61
+  const up = Array.from({ length: 40 }, (_, i) => 61 + i * 2);    // 61, 63, ...
+  const closes = [...down, ...up];
+  const macd = computeMacd(closes, { fast: 12, slow: 26, signal: 9 });
+  assert.equal(macd.histogramSeries.length, closes.length);
+  assert.ok(Number.isFinite(macd.histogram), "latest histogram should be finite");
+  let firstGreenIdx = -1;
+  for (let i = 1; i < macd.histogramSeries.length; i++) {
+    const a = macd.histogramSeries[i - 1];
+    const b = macd.histogramSeries[i];
+    if (a != null && b != null && a <= 0 && b > 0) { firstGreenIdx = i; break; }
+  }
+  assert.ok(firstGreenIdx > 0, "expected a histogram cross from <=0 to >0 during the up-leg");
+});
+
+test("computeMacd returns null when there is insufficient data", () => {
+  assert.equal(computeMacd([1, 2, 3], { fast: 12, slow: 26, signal: 9 }), null);
+});

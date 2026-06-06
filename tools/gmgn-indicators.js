@@ -106,10 +106,49 @@ export function computeRsiSeries(closes, length = 2) {
   return out;
 }
 
-// MACD line, signal, and histogram for the final close. Placeholder — implemented in Task 2.
-// Exported here so the test file can import the name without a SyntaxError at module load.
-export function computeMacd(_closes, _fast = 12, _slow = 26, _signal = 9) {
-  return null;
+// EMA aligned to `values`; null before the seed bar. Seed = SMA of the first `period`.
+function emaSeries(values, period) {
+  const out = new Array(values.length).fill(null);
+  if (values.length < period || period <= 0) return out;
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += values[i];
+  let prev = sum / period;
+  out[period - 1] = prev;
+  const k = 2 / (period + 1);
+  for (let i = period; i < values.length; i++) {
+    prev = values[i] * k + prev * (1 - k);
+    out[i] = prev;
+  }
+  return out;
+}
+
+// MACD over `closes`. Returns { macd, signal, histogram } for the last bar plus the aligned
+// `histogramSeries` (one value per close; null before the signal line is defined), or null
+// when there is not enough data for the slow EMA + signal EMA. Used for first-green detection.
+export function computeMacd(closes, { fast = 12, slow = 26, signal = 9 } = {}) {
+  if (!Array.isArray(closes) || closes.length < slow + signal) return null;
+  const emaFast = emaSeries(closes, fast);
+  const emaSlow = emaSeries(closes, slow);
+  const macdLine = closes.map((_, i) =>
+    emaFast[i] != null && emaSlow[i] != null ? emaFast[i] - emaSlow[i] : null);
+  // Signal EMA over the defined portion of macdLine, mapped back to aligned indices.
+  const firstMacd = macdLine.findIndex((v) => v != null);
+  const defined = firstMacd >= 0 ? macdLine.slice(firstMacd) : [];
+  const sigDefined = emaSeries(defined, signal);
+  const signalLine = new Array(closes.length).fill(null);
+  for (let j = 0; j < sigDefined.length; j++) {
+    if (sigDefined[j] != null) signalLine[firstMacd + j] = sigDefined[j];
+  }
+  const histogramSeries = closes.map((_, i) =>
+    macdLine[i] != null && signalLine[i] != null ? macdLine[i] - signalLine[i] : null);
+  const last = closes.length - 1;
+  if (histogramSeries[last] == null) return null;
+  return {
+    macd: macdLine[last],
+    signal: signalLine[last],
+    histogram: histogramSeries[last],
+    histogramSeries,
+  };
 }
 
 // Bollinger Bands for the final candle. Population stddev. Null if insufficient data.

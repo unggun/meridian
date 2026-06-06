@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 // We test the dispatcher's fallback by pointing the GMGN path at a fetcher that throws,
 // and stubbing the Meridian fetch via a global fetch override.
-import { fetchChartIndicatorsForMint, evaluateSupertrendBbExtension, confirmIndicatorPreset } from "./chart-indicators.js";
+import { fetchChartIndicatorsForMint, evaluateSupertrendBbExtension, evaluateSupertrendRollover, confirmSupertrendRolloverExit, confirmIndicatorPreset } from "./chart-indicators.js";
 import { __setKlineFetcherForTest, __clearKlineCacheForTest } from "./gmgn-indicators.js";
 import { config } from "../config.js";
 
@@ -249,5 +249,110 @@ test("confirmIndicatorPreset disables a side via sentinel exitPreset (no fetch, 
     __setKlineFetcherForTest(null);
     config.indicators.enabled = prev.en;
     config.indicators.exitPreset = prev.xp;
+  }
+});
+
+// 15m payload with a `recent` series for the rollover exit. recent[-1]=latest closed bar,
+// recent[-2]=previous bar (what the triggers read), recent[-3]=the bar before that.
+const mkRollover = ({ direction, recent }) => ({
+  latest: {
+    candle: { close: 100, high: 101, low: 99, open: 100 },
+    previousCandle: { close: 100 },
+    rsi: { value: 50 },
+    bollinger: { upper: 110, middle: 100, lower: 90 },
+    supertrend: { value: 105, direction },
+    states: {},
+  },
+  ...(recent ? { recent } : {}),
+});
+const rbar = ({ close = 100, bbUpper = 110, rsi = 50, macdHist = 0 } = {}) =>
+  ({ close, high: close + 1, low: close - 1, bbLower: 90, bbMiddle: 100, bbUpper, rsi, macdHist });
+const ALL = { rsiEnabled: true, macdEnabled: true, bbEnabled: true, rsiUpper: 90 };
+
+test("rollover: bullish 15m supertrend vetoes every trigger", () => {
+  const r = evaluateSupertrendRollover(
+    mkRollover({ direction: "bullish", recent: [rbar({ rsi: 95 }), rbar({ rsi: 95 })] }), ALL);
+  assert.equal(r.confirmed, false);
+  assert.equal(r.skipped, false);
+});
+
+test("rollover: RSI>90 on the just-closed bar fires when 15m ST is bearish", () => {
+  // recent[-1] is the just-closed bar.
+  const r = evaluateSupertrendRollover(
+    mkRollover({ direction: "bearish", recent: [rbar({ rsi: 50 }), rbar({ rsi: 95 })] }), ALL);
+  assert.equal(r.confirmed, true);
+});
+
+test("rollover: RSI trigger reads the just-closed bar, not the bar before it", () => {
+  // hot RSI on the older bar (recent[-2]), calm on the just-closed bar (recent[-1]) -> must NOT fire.
+  const r = evaluateSupertrendRollover(
+    mkRollover({ direction: "bearish", recent: [rbar({ rsi: 95 }), rbar({ rsi: 50 })] }),
+    { ...ALL, macdEnabled: false, bbEnabled: false });
+  assert.equal(r.confirmed, false);
+});
+
+test("rollover: just-closed bar closing above the upper band fires", () => {
+  const r = evaluateSupertrendRollover(
+    mkRollover({ direction: "bearish", recent: [rbar({ close: 100 }), rbar({ close: 120, bbUpper: 110 })] }),
+    { ...ALL, rsiEnabled: false, macdEnabled: false });
+  assert.equal(r.confirmed, true);
+});
+
+test("rollover: just-closed bar = first green histogram fires", () => {
+  // recent[-2] hist<=0, recent[-1] hist>0 -> first green on the just-closed bar.
+  const r = evaluateSupertrendRollover(
+    mkRollover({ direction: "bearish", recent: [rbar({ macdHist: -1 }), rbar({ macdHist: 2 })] }),
+    { ...ALL, rsiEnabled: false, bbEnabled: false });
+  assert.equal(r.confirmed, true);
+});
+
+test("rollover: macd does not fire when the bar before was already green", () => {
+  // recent[-2] already green -> just-closed bar is not the FIRST green.
+  const r = evaluateSupertrendRollover(
+    mkRollover({ direction: "bearish", recent: [rbar({ macdHist: 1 }), rbar({ macdHist: 2 })] }),
+    { ...ALL, rsiEnabled: false, bbEnabled: false });
+  assert.equal(r.confirmed, false);
+});
+
+test("rollover: a disabled sub-trigger does not fire", () => {
+  const r = evaluateSupertrendRollover(
+    mkRollover({ direction: "bearish", recent: [rbar({ rsi: 50 }), rbar({ rsi: 95 })] }),
+    { rsiEnabled: false, macdEnabled: false, bbEnabled: false, rsiUpper: 90 });
+  assert.equal(r.confirmed, false);
+});
+
+test("rollover: missing recent series degrades to skipped (no exit)", () => {
+  const r = evaluateSupertrendRollover(mkRollover({ direction: "bearish", recent: undefined }), ALL);
+  assert.equal(r.confirmed, false);
+  assert.equal(r.skipped, true);
+});
+
+test("confirmSupertrendRolloverExit returns skipped when payload has no recent series", async () => {
+  const prevSource = config.gmgn.indicatorSource;
+  config.gmgn.indicatorSource = "meridian"; // meridian payload has no `recent` → degrade path
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    async text() {
+      return JSON.stringify({
+        latest: {
+          candle: { close: 100 },
+          previousCandle: { close: 100 },
+          rsi: { value: 50 },
+          bollinger: { upper: 110, middle: 100, lower: 90 },
+          supertrend: { value: 105, direction: "bearish" },
+          states: {},
+        },
+      });
+    },
+  });
+  try {
+    const r = await confirmSupertrendRolloverExit({ mint: "MINTROLL" });
+    assert.equal(r.skipped, true);
+    assert.equal(r.confirmed, false);
+    assert.equal(r.preset, "supertrend_rollover_exit");
+  } finally {
+    globalThis.fetch = realFetch;
+    config.gmgn.indicatorSource = prevSource;
   }
 });

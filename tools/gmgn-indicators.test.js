@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resampleKlines, computeIndicators, DEFAULT_INDICATOR_PARAMS } from "./gmgn-indicators.js";
+import { resampleKlines, computeIndicators, DEFAULT_INDICATOR_PARAMS, computeRsi, computeRsiSeries, computeMacd } from "./gmgn-indicators.js";
 
 // Helper: build a 1m candle. time in ms.
 const c = (time, open, high, low, close, volume) => ({ time, open, high, low, close, volume });
@@ -87,8 +87,6 @@ test("resampleKlines dropInProgress excludes the current (latest) period bucket"
 test("resampleKlines returns [] for empty input", () => {
   assert.deepEqual(resampleKlines([], 5), []);
 });
-import { computeRsi } from "./gmgn-indicators.js";
-
 test("computeRsi returns 100 for a strictly rising close series", () => {
   const closes = [1, 2, 3, 4, 5, 6, 7, 8];
   const rsi = computeRsi(closes, 2);
@@ -443,4 +441,69 @@ test("Berries 15m native deep-history reads bullish (GMGN chart), where the 1m-r
   const legacy = computeSupertrend(closed.slice(-DEFAULT_INDICATOR_PARAMS.warmupBars));
   assert.equal(legacy.direction, berriesNative.legacy66Direction,
     "the 66-bar resample window reproduces the bearish false-veto the native path fixes");
+});
+
+test("computeRsiSeries is candle-aligned and its final value matches computeRsi", () => {
+  const closes = [10, 11, 10.5, 12, 13, 12.5, 14, 13, 15, 16, 15.5, 17];
+  const series = computeRsiSeries(closes, 2);
+  assert.equal(series.length, closes.length);          // aligned to candles
+  assert.equal(series[0], null);                        // no RSI before warmup
+  assert.equal(series[1], null, "no RSI at the second warmup slot either (length=2)");
+  assert.ok(series[2] !== null, "first RSI appears at index `length`");
+  assert.ok(Math.abs(series[2] - computeRsi(closes.slice(0, 3), 2)) < 1e-9, "intermediate slot matches prefix computeRsi");
+  const pointwise = computeRsi(closes, 2);
+  assert.ok(Math.abs(series[series.length - 1] - pointwise) < 1e-9,
+    `series tail ${series[series.length - 1]} should equal point RSI ${pointwise}`);
+});
+
+test("computeRsiSeries returns all-null / empty for insufficient or non-array input", () => {
+  assert.deepEqual(computeRsiSeries([10, 11], 2), [null, null]);
+  assert.deepEqual(computeRsiSeries(null, 2), []);
+});
+
+test("computeMacd returns a candle-aligned histogram series with a first-green crossover", () => {
+  // Flat warmup, then a sharp sustained drop (histogram goes clearly negative),
+  // then a sharp rise (MACD overtakes signal → a genuine first-green cross).
+  const flat = Array.from({ length: 30 }, () => 100);
+  const drop = Array.from({ length: 20 }, (_, i) => 100 - (i + 1) * 3); // 97 -> 40
+  const rise = Array.from({ length: 30 }, (_, i) => 40 + (i + 1) * 2);  // 42 -> 100
+  const closes = [...flat, ...drop, ...rise]; // length 80
+  const macd = computeMacd(closes, { fast: 12, slow: 26, signal: 9 });
+
+  assert.equal(macd.histogramSeries.length, closes.length, "histogram series is candle-aligned");
+  assert.ok(Number.isFinite(macd.histogram), "latest histogram should be finite");
+
+  const defined = macd.histogramSeries.filter((v) => v != null);
+  const minHist = Math.min(...defined);
+  assert.ok(minHist < -1e-2, `histogram must go clearly negative during the drop (min=${minHist})`);
+
+  const EPS = 1e-3;
+  let firstGreenIdx = -1;
+  for (let i = 1; i < macd.histogramSeries.length; i++) {
+    const a = macd.histogramSeries[i - 1];
+    const b = macd.histogramSeries[i];
+    if (a != null && b != null && a < -EPS && b > EPS) { firstGreenIdx = i; break; }
+  }
+  assert.ok(firstGreenIdx > 50,
+    `expected a genuine negative->positive histogram cross in the rise region (idx>50), got ${firstGreenIdx}`);
+});
+
+test("computeMacd returns null when there is insufficient data", () => {
+  assert.equal(computeMacd([1, 2, 3], { fast: 12, slow: 26, signal: 9 }), null);
+});
+
+test("computeIndicators enriches recent with rsi + macdHist and exposes latest.macd", () => {
+  const base = ALIGNED_15M;
+  // 80 candles with enough variation for RSI/MACD to be defined.
+  const candles = Array.from({ length: 80 }, (_, i) => {
+    const close = 100 + Math.sin(i / 3) * 6 + i * 0.15;
+    return c(base + i * 15 * min, close, close + 1.5, close - 1.5, close, 100);
+  });
+  const params = { ...DEFAULT_INDICATOR_PARAMS, rsiLength: 2 };
+  const out = computeIndicators(candles, params);
+  assert.ok(Array.isArray(out.recent) && out.recent.length > 0);
+  const lastBar = out.recent[out.recent.length - 1];
+  assert.ok("rsi" in lastBar && "macdHist" in lastBar, "recent bars must carry rsi + macdHist");
+  assert.ok(Number.isFinite(lastBar.rsi), "trailing rsi should be finite");
+  assert.ok(out.latest.macd && Number.isFinite(out.latest.macd.histogram), "latest.macd present");
 });

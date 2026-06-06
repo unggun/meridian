@@ -300,6 +300,53 @@ export function evaluateSupertrendBbExtension(payload5m, payload15m, params) {
   };
 }
 
+// Pure decision for the supertrend_rollover_exit (no I/O). params pre-coerced:
+//   { rsiEnabled, macdEnabled, bbEnabled, rsiUpper:number }.
+// Thesis: a trend rollover / blow-off top. Gate on 15m supertrend bearish, then OR three
+// blow-off triggers read from the PREVIOUS closed bar (recent[-2]):
+//   rsi  → prev.rsi > rsiUpper
+//   bb   → prev.close > prev.bbUpper
+//   macd → first green histogram on prev (prev.macdHist > 0 && recent[-3].macdHist <= 0)
+// No `recent` series (meridian fallback) → { skipped:true } so the cron never exits on
+// missing data (it requires confirmed && !skipped). Returns { confirmed, reason, signal, skipped }.
+export function evaluateSupertrendRollover(payload, params) {
+  const summary = buildSignalSummary(payload);
+  const base = { signal: summary, skipped: false };
+  if (summary.supertrendDirection !== "bearish") {
+    return { ...base, confirmed: false, reason: `15m supertrend ${summary.supertrendDirection} (need bearish)` };
+  }
+  const recent = Array.isArray(payload?.recent) ? payload.recent : null;
+  if (!recent || recent.length < 2) {
+    return { ...base, skipped: true, confirmed: false, reason: "No recent series — rollover exit skipped" };
+  }
+  const prev = recent[recent.length - 2];
+  const prev2 = recent.length >= 3 ? recent[recent.length - 3] : null;
+
+  const fired = [];
+  if (params.rsiEnabled && prev?.rsi != null && prev.rsi > params.rsiUpper) {
+    fired.push(`RSI ${prev.rsi.toFixed(1)} > ${params.rsiUpper}`);
+  }
+  if (params.bbEnabled && prev?.close != null && prev?.bbUpper != null && prev.close > prev.bbUpper) {
+    fired.push(`close ${prev.close} > upper band ${prev.bbUpper.toFixed(6)}`);
+  }
+  if (
+    params.macdEnabled &&
+    prev?.macdHist != null && prev.macdHist > 0 &&
+    prev2?.macdHist != null && prev2.macdHist <= 0
+  ) {
+    fired.push("MACD first green histogram");
+  }
+
+  const confirmed = fired.length > 0;
+  return {
+    ...base,
+    confirmed,
+    reason: confirmed
+      ? `15m bearish supertrend + ${fired.join(" / ")} (prev bar)`
+      : "15m bearish but no rollover trigger on previous bar",
+  };
+}
+
 // Fetch one interval and evaluate a single preset, independent of the global
 // `config.indicators.enabled` gate. The caller decides whether to invoke this.
 // Returns { confirmed, reason, signal } from evaluatePreset.

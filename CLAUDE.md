@@ -91,6 +91,9 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 | managementIntervalMin | schedule | 10 |
 | screeningIntervalMin | schedule | 30 |
 | managementModel / screeningModel / generalModel | llm | openrouter/healer-alpha |
+| rolloverExitEnabled | indicators | false |
+| rolloverRsi / rolloverMacd / rolloverBb | indicators | true |
+| rolloverRsiUpper | indicators | 90 |
 
 **`computeDeployAmount(walletSol)`** — scales position size with wallet balance (compounding). Formula: `clamp(deployable × positionSizePct, floor=deployAmountSol, ceil=maxDeployAmount)`.
 
@@ -259,6 +262,23 @@ time-sensitive, so N is small — for reliable capture at a 30-min screener cade
 without recovering) is mitigated by the 15m filter + veto, not eliminated. Tune via
 `/setcfg extensionLookbackBars|extensionTagBand|extensionFloorBand`. (Supersedes the prior
 `supertrend_bb_pullback`, which was lower-band/buy-the-dip — wrong polarity for bins-below LP.)
+
+**Exit preset `supertrend_rollover_exit` (composite, 15m, PnL-independent).** One exit that
+closes ANY position (regardless of PnL) when the **15m supertrend is bearish** AND any enabled
+blow-off trigger fired on the **previous closed 15m bar**: `rolloverRsi` (RSI(2) >
+`rolloverRsiUpper`, default 90), `rolloverMacd` (first green MACD histogram — prev bar > 0,
+the bar before ≤ 0), or `rolloverBb` (prev bar closed above the upper Bollinger band). The
+three are OR'd and individually toggleable. Evaluated by `confirmSupertrendRolloverExit`
+(tools/chart-indicators.js) → `evaluateSupertrendRollover`, called directly from the
+management cron's `rolloverExitEnabled` block in index.js so it runs **independent of
+`config.indicators.enabled`** (like the `supertrendExitEnabled` breakdown exit). MACD +
+per-bar RSI/`macdHist` come from the GMGN path (`computeMacd`/`computeRsiSeries`, exposed on
+the `recent` series); the meridian fallback has no series and **degrades to skipped** (never
+closes on missing data). Hits route through the standard 2-cycle chart-exit debounce. Note:
+when both `supertrendExitEnabled` and `rolloverExitEnabled` are on, the `!indicatorExitMap.has`
+candidate filter prevents either block from re-processing a position the other already
+flagged this cycle. Tune via
+`/setcfg rolloverExitEnabled|rolloverRsi|rolloverMacd|rolloverBb|rolloverRsiUpper`.
 
 ---
 

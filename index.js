@@ -360,7 +360,7 @@ export async function runManagementCycle({ silent = false } = {}) {
 
     // ── Rollover / blow-off exit (independent of PnL and the enabled/exitPreset gate) ──
     // 15m supertrend bearish + any enabled blow-off trigger (RSI>90 / first-green MACD /
-    // close above upper band) on the PREVIOUS closed bar. Writes to indicatorExitMap, so it
+    // close above upper band) on the just-closed bar (recent[-1]). Writes to indicatorExitMap, so it
     // reuses the same 2-cycle debounce → close path as the other chart exits.
     if (config.indicators?.rolloverExitEnabled) {
       const candidates = positionData.filter(

@@ -462,20 +462,30 @@ test("computeRsiSeries returns all-null / empty for insufficient or non-array in
 });
 
 test("computeMacd returns a candle-aligned histogram series with a first-green crossover", () => {
-  // Down-leg then up-leg: the histogram must cross from <=0 to >0 during the up-leg.
-  const down = Array.from({ length: 40 }, (_, i) => 100 - i);     // 100..61
-  const up = Array.from({ length: 40 }, (_, i) => 61 + i * 2);    // 61, 63, ...
-  const closes = [...down, ...up];
+  // Flat warmup, then a sharp sustained drop (histogram goes clearly negative),
+  // then a sharp rise (MACD overtakes signal → a genuine first-green cross).
+  const flat = Array.from({ length: 30 }, () => 100);
+  const drop = Array.from({ length: 20 }, (_, i) => 100 - (i + 1) * 3); // 97 -> 40
+  const rise = Array.from({ length: 30 }, (_, i) => 40 + (i + 1) * 2);  // 42 -> 100
+  const closes = [...flat, ...drop, ...rise]; // length 80
   const macd = computeMacd(closes, { fast: 12, slow: 26, signal: 9 });
-  assert.equal(macd.histogramSeries.length, closes.length);
+
+  assert.equal(macd.histogramSeries.length, closes.length, "histogram series is candle-aligned");
   assert.ok(Number.isFinite(macd.histogram), "latest histogram should be finite");
+
+  const defined = macd.histogramSeries.filter((v) => v != null);
+  const minHist = Math.min(...defined);
+  assert.ok(minHist < -1e-2, `histogram must go clearly negative during the drop (min=${minHist})`);
+
+  const EPS = 1e-3;
   let firstGreenIdx = -1;
   for (let i = 1; i < macd.histogramSeries.length; i++) {
     const a = macd.histogramSeries[i - 1];
     const b = macd.histogramSeries[i];
-    if (a != null && b != null && a <= 0 && b > 0) { firstGreenIdx = i; break; }
+    if (a != null && b != null && a < -EPS && b > EPS) { firstGreenIdx = i; break; }
   }
-  assert.ok(firstGreenIdx > 0, "expected a histogram cross from <=0 to >0 during the up-leg");
+  assert.ok(firstGreenIdx > 50,
+    `expected a genuine negative->positive histogram cross in the rise region (idx>50), got ${firstGreenIdx}`);
 });
 
 test("computeMacd returns null when there is insufficient data", () => {

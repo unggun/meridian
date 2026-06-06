@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resampleKlines, computeIndicators, DEFAULT_INDICATOR_PARAMS } from "./gmgn-indicators.js";
+import { resampleKlines, computeIndicators, DEFAULT_INDICATOR_PARAMS, computeRsi, computeRsiSeries, computeMacd } from "./gmgn-indicators.js";
 
 // Helper: build a 1m candle. time in ms.
 const c = (time, open, high, low, close, volume) => ({ time, open, high, low, close, volume });
@@ -87,8 +87,6 @@ test("resampleKlines dropInProgress excludes the current (latest) period bucket"
 test("resampleKlines returns [] for empty input", () => {
   assert.deepEqual(resampleKlines([], 5), []);
 });
-import { computeRsi } from "./gmgn-indicators.js";
-
 test("computeRsi returns 100 for a strictly rising close series", () => {
   const closes = [1, 2, 3, 4, 5, 6, 7, 8];
   const rsi = computeRsi(closes, 2);
@@ -443,4 +441,14 @@ test("Berries 15m native deep-history reads bullish (GMGN chart), where the 1m-r
   const legacy = computeSupertrend(closed.slice(-DEFAULT_INDICATOR_PARAMS.warmupBars));
   assert.equal(legacy.direction, berriesNative.legacy66Direction,
     "the 66-bar resample window reproduces the bearish false-veto the native path fixes");
+});
+
+test("computeRsiSeries is candle-aligned and its final value matches computeRsi", () => {
+  const closes = [10, 11, 10.5, 12, 13, 12.5, 14, 13, 15, 16, 15.5, 17];
+  const series = computeRsiSeries(closes, 2);
+  assert.equal(series.length, closes.length);          // aligned to candles
+  assert.equal(series[0], null);                        // no RSI before warmup
+  const pointwise = computeRsi(closes, 2);
+  assert.ok(Math.abs(series[series.length - 1] - pointwise) < 1e-9,
+    `series tail ${series[series.length - 1]} should equal point RSI ${pointwise}`);
 });

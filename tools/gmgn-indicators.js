@@ -77,6 +77,39 @@ export function computeRsi(closes, length = 2) {
   return 100 - 100 / (1 + rs);
 }
 
+// Rolling Wilder RSI aligned to `closes` (one value per close; null before warmup).
+// series[i] uses the same Wilder smoothing as computeRsi, so series[last] === computeRsi(closes).
+export function computeRsiSeries(closes, length = 2) {
+  const out = new Array(Array.isArray(closes) ? closes.length : 0).fill(null);
+  if (!Array.isArray(closes) || closes.length < length + 1) return out;
+  let avgGain = 0;
+  let avgLoss = 0;
+  for (let i = 1; i <= length; i++) {
+    const delta = closes[i] - closes[i - 1];
+    if (delta >= 0) avgGain += delta;
+    else avgLoss -= delta;
+  }
+  avgGain /= length;
+  avgLoss /= length;
+  const rsiFrom = (g, l) => (l === 0 ? (g === 0 ? 50 : 100) : 100 - 100 / (1 + g / l));
+  out[length] = rsiFrom(avgGain, avgLoss);
+  for (let i = length + 1; i < closes.length; i++) {
+    const delta = closes[i] - closes[i - 1];
+    const gain = delta > 0 ? delta : 0;
+    const loss = delta < 0 ? -delta : 0;
+    avgGain = (avgGain * (length - 1) + gain) / length;
+    avgLoss = (avgLoss * (length - 1) + loss) / length;
+    out[i] = rsiFrom(avgGain, avgLoss);
+  }
+  return out;
+}
+
+// MACD line, signal, and histogram for the final close. Placeholder — implemented in Task 2.
+// Exported here so the test file can import the name without a SyntaxError at module load.
+export function computeMacd(_closes, _fast = 12, _slow = 26, _signal = 9) {
+  return null;
+}
+
 // Bollinger Bands for the final candle. Population stddev. Null if insufficient data.
 export function computeBollinger(closes, period = 20, stdDevMult = 2) {
   if (!Array.isArray(closes) || closes.length < period) return null;

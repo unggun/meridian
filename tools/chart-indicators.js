@@ -303,10 +303,10 @@ export function evaluateSupertrendBbExtension(payload5m, payload15m, params) {
 // Pure decision for the supertrend_rollover_exit (no I/O). params pre-coerced:
 //   { rsiEnabled, macdEnabled, bbEnabled, rsiUpper:number }.
 // Thesis: a trend rollover / blow-off top. Gate on 15m supertrend bearish, then OR three
-// blow-off triggers read from the PREVIOUS closed bar (recent[-2]):
+// blow-off triggers read from the just-closed bar (recent[-1]); MACD first-green also reads recent[-2]:
 //   rsi  → prev.rsi > rsiUpper
 //   bb   → prev.close > prev.bbUpper
-//   macd → first green histogram on prev (prev.macdHist > 0 && recent[-3].macdHist <= 0)
+//   macd → first green histogram on prev (prev.macdHist > 0 && recent[-2].macdHist <= 0)
 // No `recent` series (meridian fallback) → { skipped:true } so the cron never exits on
 // missing data (it requires confirmed && !skipped). Returns { confirmed, reason, signal, skipped }.
 export function evaluateSupertrendRollover(payload, params) {
@@ -316,11 +316,14 @@ export function evaluateSupertrendRollover(payload, params) {
     return { ...base, confirmed: false, reason: `15m supertrend ${summary.supertrendDirection} (need bearish)` };
   }
   const recent = Array.isArray(payload?.recent) ? payload.recent : null;
-  if (!recent || recent.length < 2) {
+  if (!recent || recent.length < 1) {
     return { ...base, skipped: true, confirmed: false, reason: "No recent series — rollover exit skipped" };
   }
-  const prev = recent[recent.length - 2];
-  const prev2 = recent.length >= 3 ? recent[recent.length - 3] : null;
+  // recent[-1] is the most-recently-CLOSED bar (the in-progress period was dropped
+  // upstream). Triggers evaluate that just-closed bar; MACD first-green also needs the
+  // bar before it (recent[-2]).
+  const prev = recent[recent.length - 1];
+  const prev2 = recent.length >= 2 ? recent[recent.length - 2] : null;
 
   const fired = [];
   if (params.rsiEnabled && prev?.rsi != null && prev.rsi > params.rsiUpper) {

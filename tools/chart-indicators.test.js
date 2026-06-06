@@ -273,47 +273,50 @@ test("rollover: bullish 15m supertrend vetoes every trigger", () => {
   const r = evaluateSupertrendRollover(
     mkRollover({ direction: "bullish", recent: [rbar({ rsi: 95 }), rbar({ rsi: 95 })] }), ALL);
   assert.equal(r.confirmed, false);
+  assert.equal(r.skipped, false);
 });
 
-test("rollover: RSI>90 on the previous bar fires when 15m ST is bearish", () => {
+test("rollover: RSI>90 on the just-closed bar fires when 15m ST is bearish", () => {
+  // recent[-1] is the just-closed bar.
   const r = evaluateSupertrendRollover(
-    mkRollover({ direction: "bearish", recent: [rbar({ rsi: 95 }), rbar({ rsi: 50 })] }), ALL);
+    mkRollover({ direction: "bearish", recent: [rbar({ rsi: 50 }), rbar({ rsi: 95 })] }), ALL);
   assert.equal(r.confirmed, true);
 });
 
-test("rollover: RSI trigger reads the previous bar, not the latest", () => {
-  // latest (recent[-1]) is hot, previous (recent[-2]) is calm → must NOT fire.
+test("rollover: RSI trigger reads the just-closed bar, not the bar before it", () => {
+  // hot RSI on the older bar (recent[-2]), calm on the just-closed bar (recent[-1]) -> must NOT fire.
   const r = evaluateSupertrendRollover(
-    mkRollover({ direction: "bearish", recent: [rbar({ rsi: 50 }), rbar({ rsi: 95 })] }),
+    mkRollover({ direction: "bearish", recent: [rbar({ rsi: 95 }), rbar({ rsi: 50 })] }),
     { ...ALL, macdEnabled: false, bbEnabled: false });
   assert.equal(r.confirmed, false);
 });
 
-test("rollover: previous bar closing above the upper band fires", () => {
+test("rollover: just-closed bar closing above the upper band fires", () => {
   const r = evaluateSupertrendRollover(
-    mkRollover({ direction: "bearish", recent: [rbar({ close: 120, bbUpper: 110 }), rbar({ close: 100 })] }),
+    mkRollover({ direction: "bearish", recent: [rbar({ close: 100 }), rbar({ close: 120, bbUpper: 110 })] }),
     { ...ALL, rsiEnabled: false, macdEnabled: false });
   assert.equal(r.confirmed, true);
 });
 
-test("rollover: previous bar = first green histogram fires", () => {
-  // recent[-3] hist<=0, recent[-2] hist>0 → first green on the previous bar.
+test("rollover: just-closed bar = first green histogram fires", () => {
+  // recent[-2] hist<=0, recent[-1] hist>0 -> first green on the just-closed bar.
   const r = evaluateSupertrendRollover(
-    mkRollover({ direction: "bearish", recent: [rbar({ macdHist: -1 }), rbar({ macdHist: 2 }), rbar({ macdHist: 5 })] }),
+    mkRollover({ direction: "bearish", recent: [rbar({ macdHist: -1 }), rbar({ macdHist: 2 })] }),
     { ...ALL, rsiEnabled: false, bbEnabled: false });
   assert.equal(r.confirmed, true);
 });
 
 test("rollover: macd does not fire when the bar before was already green", () => {
+  // recent[-2] already green -> just-closed bar is not the FIRST green.
   const r = evaluateSupertrendRollover(
-    mkRollover({ direction: "bearish", recent: [rbar({ macdHist: 1 }), rbar({ macdHist: 2 }), rbar({ macdHist: 5 })] }),
+    mkRollover({ direction: "bearish", recent: [rbar({ macdHist: 1 }), rbar({ macdHist: 2 })] }),
     { ...ALL, rsiEnabled: false, bbEnabled: false });
   assert.equal(r.confirmed, false);
 });
 
 test("rollover: a disabled sub-trigger does not fire", () => {
   const r = evaluateSupertrendRollover(
-    mkRollover({ direction: "bearish", recent: [rbar({ rsi: 95 }), rbar({ rsi: 50 })] }),
+    mkRollover({ direction: "bearish", recent: [rbar({ rsi: 50 }), rbar({ rsi: 95 })] }),
     { rsiEnabled: false, macdEnabled: false, bbEnabled: false, rsiUpper: 90 });
   assert.equal(r.confirmed, false);
 });

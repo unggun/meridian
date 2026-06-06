@@ -335,6 +335,14 @@ export const config = {
     // above. Backend intervals: 5_MINUTE or 15_MINUTE only.
     supertrendExitEnabled: indicatorUserConfig.supertrendExitEnabled ?? false,
     supertrendExitInterval: String(indicatorUserConfig.supertrendExitInterval ?? "15_MINUTE").trim().toUpperCase(),
+    // Rollover / blow-off exit (Approach A): ONE preset, three OR'd sub-triggers, all on
+    // 15m, evaluated on ALL positions regardless of PnL and regardless of `enabled`. Each
+    // sub-trigger reads the PREVIOUS closed bar. See confirmSupertrendRolloverExit.
+    rolloverExitEnabled: indicatorUserConfig.rolloverExitEnabled ?? false,
+    rolloverRsi: indicatorUserConfig.rolloverRsi ?? true,         // prev-bar RSI(2) > rolloverRsiUpper
+    rolloverMacd: indicatorUserConfig.rolloverMacd ?? true,       // prev bar = first green MACD histogram
+    rolloverBb: indicatorUserConfig.rolloverBb ?? true,           // prev bar closed above upper Bollinger band
+    rolloverRsiUpper: indicatorUserConfig.rolloverRsiUpper ?? 90, // dedicated (does not clobber rsiOverbought=80)
   },
 };
 

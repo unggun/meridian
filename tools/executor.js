@@ -456,6 +456,11 @@ const toolMap = {
       extensionFloorBand: ["indicators", "extensionFloorBand", ["chartIndicators", "extensionFloorBand"]],
       supertrendExitEnabled: ["indicators", "supertrendExitEnabled", ["chartIndicators", "supertrendExitEnabled"]],
       supertrendExitInterval: ["indicators", "supertrendExitInterval", ["chartIndicators", "supertrendExitInterval"]],
+      rolloverExitEnabled: ["indicators", "rolloverExitEnabled", ["chartIndicators", "rolloverExitEnabled"]],
+      rolloverRsi: ["indicators", "rolloverRsi", ["chartIndicators", "rolloverRsi"]],
+      rolloverMacd: ["indicators", "rolloverMacd", ["chartIndicators", "rolloverMacd"]],
+      rolloverBb: ["indicators", "rolloverBb", ["chartIndicators", "rolloverBb"]],
+      rolloverRsiUpper: ["indicators", "rolloverRsiUpper", ["chartIndicators", "rolloverRsiUpper"]],
     };
 
     const applied = {};

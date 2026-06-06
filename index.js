@@ -9,7 +9,7 @@ import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
 import { getWalletBalances } from "./tools/wallet.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { formatGmgnCandidateForPrompt } from "./tools/gmgn.js";
-import { confirmIndicatorPreset, evaluateIntervalPreset } from "./tools/chart-indicators.js";
+import { confirmIndicatorPreset, evaluateIntervalPreset, confirmSupertrendRolloverExit } from "./tools/chart-indicators.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
@@ -353,6 +353,34 @@ export async function runManagementCycle({ silent = false } = {}) {
             const reason = `${interval} supertrend: ${r.value.reason}`;
             indicatorExitMap.set(p.position, reason);
             log("state", `Supertrend exit alert for ${p.pair}: ${reason}`);
+          }
+        });
+      }
+    }
+
+    // ── Rollover / blow-off exit (independent of PnL and the enabled/exitPreset gate) ──
+    // 15m supertrend bearish + any enabled blow-off trigger (RSI>90 / first-green MACD /
+    // close above upper band) on the PREVIOUS closed bar. Writes to indicatorExitMap, so it
+    // reuses the same 2-cycle debounce → close path as the other chart exits.
+    if (config.indicators?.rolloverExitEnabled) {
+      const candidates = positionData.filter(
+        (p) => p.base_mint && !exitMap.has(p.position) && !indicatorExitMap.has(p.position),
+      );
+      if (candidates.length > 0) {
+        const results = await Promise.allSettled(
+          candidates.map((p) => confirmSupertrendRolloverExit({ mint: p.base_mint, refresh: true })),
+        );
+        candidates.forEach((p, i) => {
+          const r = results[i];
+          if (r.status !== "fulfilled") {
+            log("state_warn", `Rollover exit check failed for ${p.pair}: ${r.reason?.message || r.reason}`);
+            return;
+          }
+          const v = r.value;
+          if (v?.confirmed && !v.skipped) {
+            const reason = v.reason || "Rollover blow-off signal";
+            indicatorExitMap.set(p.position, reason);
+            log("state", `Rollover exit alert for ${p.pair}: ${reason}`);
           }
         });
       }

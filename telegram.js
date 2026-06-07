@@ -430,12 +430,12 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
   );
 }
 
-export async function notifyClose({ pair, pnlUsd, pnlPct, reason }) {
+export async function notifyClose({ pair, pnlUsd, pnlPct, reason, currency = "$" }) {
   if (hasActiveLiveMessage()) return;
   const sign = pnlUsd >= 0 ? "+" : "";
   await sendHTML(
     `🔒 <b>Closed</b> ${escapeHtml(pair)}\n` +
-    `PnL: ${sign}$${(pnlUsd ?? 0).toFixed(2)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)` +
+    `PnL: ${sign}${currency}${(pnlUsd ?? 0).toFixed(2)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)` +
     (reason ? `\nReason: ${escapeHtml(reason)}` : "")
   );
 }

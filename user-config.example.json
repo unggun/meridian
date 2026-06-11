@@ -93,6 +93,14 @@
   "publicApiKey": "",
   "agentMeridianApiUrl": "https://api.agentmeridian.xyz/api",
   "lpAgentRelayEnabled": false,
+
+  "pnlSource": "rpc",
+  "pnlRpcUrl": "https://pump.helius-rpc.com",
+  "pnlPollIntervalSec": 3,
+  "pnlDepositCacheTtlSec": 300,
+
+  "gmgnFeeSource": "gmgn",
+
   "chartIndicators": {
     "enabled": false,
     "entryPreset": "supertrend_break",

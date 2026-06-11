@@ -414,7 +414,13 @@ const toolMap = {
       publicApiKey: ["api", "publicApiKey"],
       agentMeridianApiUrl: ["api", "url"],
       lpAgentRelayEnabled: ["api", "lpAgentRelayEnabled"],
+      // pnl fetcher / poller
+      pnlSource: ["pnl", "source"],
+      pnlRpcUrl: ["pnl", "rpcUrl"],
+      pnlPollIntervalSec: ["pnl", "pollIntervalSec"],
+      pnlDepositCacheTtlSec: ["pnl", "depositCacheTtlSec"],
       // GMGN screening
+      gmgnFeeSource: ["gmgn", "feeSource"],
       gmgnApiKey: ["gmgn", "apiKey"],
       gmgnBaseUrl: ["gmgn", "baseUrl"],
       gmgnInterval: ["gmgn", "interval"],
@@ -616,7 +622,7 @@ const toolMap = {
     }
 
     // Restart cron jobs if intervals changed
-    const intervalChanged = applied.managementIntervalMin != null || applied.screeningIntervalMin != null;
+    const intervalChanged = applied.managementIntervalMin != null || applied.screeningIntervalMin != null || applied.pnlPollIntervalSec != null;
     if (intervalChanged && _cronRestarter) {
       _cronRestarter();
       log("config", `Cron restarted — management: ${config.schedule.managementIntervalMin}m, screening: ${config.schedule.screeningIntervalMin}m`);

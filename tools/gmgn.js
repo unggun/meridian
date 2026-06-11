@@ -99,7 +99,7 @@ function isDumpKol(entry) {
   return dump.some((dumpName) => normalized.includes(dumpName));
 }
 
-function passBasicRankFilter(token) {
+export function passBasicRankFilter(token) {
   const g = config.gmgn;
   const reasons = [];
   const tokenAgeHours = num(token.creation_timestamp) > 0
@@ -115,6 +115,19 @@ function passBasicRankFilter(token) {
     reasons.push(`age ${tokenAgeHours.toFixed(2)}h > ${g.maxTokenAgeHours}h`);
   }
   if (num(token.volume) < g.minVolume) reasons.push(`volume ${num(token.volume)} < ${g.minVolume}`);
+  const creatorHold = String(token.creator_token_status || "").toLowerCase() === "creator_hold";
+  if (creatorHold && g.creatorHoldGate !== false) {
+    if (g.creatorHoldGateLogOnly !== false) {
+      // Log-only by default: creator_hold was 23% of winners vs 71% of pure losers
+      // (2026-06-11, n=7 losers) — too few loser samples to enforce yet. Only log
+      // when this would be the sole rejection reason, so the would-block count is real.
+      if (reasons.length === 0) {
+        log("gmgn", `Creator-hold gate (log-only): WOULD reject ${token.symbol || token.address} — creator still holding`);
+      }
+    } else {
+      reasons.push("creator still holding");
+    }
+  }
   return { pass: reasons.length === 0, reasons };
 }
 
@@ -317,7 +330,7 @@ async function pickBestPool(pools, timeframe = MIN_VOLATILITY_TIMEFRAME) {
   return { pool: chosenPool, detail: chosenDetail, volatilityDetail, volatilityTimeframe, feeTvlRatio24h };
 }
 
-function condenseGmgnCandidate({ token, pool, poolDetail, volatilityDetail = poolDetail, volatilityTimeframe = MIN_VOLATILITY_TIMEFRAME, security, info, infoAnalysis, holdersAnalysis, indicatorSignal, feeTvlRatio24h = null }) {
+export function condenseGmgnCandidate({ token, pool, poolDetail, volatilityDetail = poolDetail, volatilityTimeframe = MIN_VOLATILITY_TIMEFRAME, security, info, infoAnalysis, holdersAnalysis, indicatorSignal, feeTvlRatio24h = null }) {
   const poolAddress = pool.address || pool.pool_address;
   // Stage 5 Pool Discovery provides active_tvl and fee_active_tvl_ratio
   // Stage 3 Meteora search provides tvl and bin_step/base_fee_pct via pool_config
@@ -399,6 +412,13 @@ function condenseGmgnCandidate({ token, pool, poolDetail, volatilityDetail = poo
     gmgn_whale_wallets: infoAnalysis?.whaleWallets ?? null,
     gmgn_fresh_wallets: infoAnalysis?.freshWallets ?? null,
     gmgn_sniper_count: num(security?.sniper_count ?? token.sniper_count),
+    // Stage 1 rank security/dev fields — rank is a live list, so these must be
+    // captured here and persisted via signal_snapshot or they're lost for backtests
+    gmgn_rug_ratio: optionalNum(token.rug_ratio),
+    gmgn_creator_token_status: token.creator_token_status || null,
+    gmgn_wash_trading: token.is_wash_trading != null ? boolish(token.is_wash_trading) : null,
+    gmgn_creator_open_count: optionalNum(info.dev?.creator_open_count),
+    gmgn_twitter_create_token_count: optionalNum(token.twitter_create_token_count ?? info.dev?.twitter_create_token_count),
     gmgn_kol_holding: holdersAnalysis.kolHolding,
     gmgn_smart_holding: holdersAnalysis.smartHolding,
     gmgn_smart_accumulating: holdersAnalysis.smartAccumulating,

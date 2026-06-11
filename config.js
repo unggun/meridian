@@ -88,6 +88,9 @@ export const config = {
     maxFeeActiveTvlRatio: u.maxFeeActiveTvlRatio ?? null,
     minFeeTvlRatio24h: u.minFeeTvlRatio24h ?? null, // 24h fee/TOTAL-tvl floor (%), null = off. "won't cover IL below ~20%"
     fee24hGateLogOnly: u.fee24hGateLogOnly ?? false, // true = log would-drop pools but don't filter
+    volatilityGateMin: u.volatilityGateMin ?? null, // blocked volatility band lower edge (June data: 4-6 band = 31% winrate), null = off
+    volatilityGateMax: u.volatilityGateMax ?? null, // blocked volatility band upper edge, null = off
+    volatilityGateLogOnly: u.volatilityGateLogOnly ?? true, // true = log would-block deploys but allow them
     minTvl:            u.minTvl            ?? 10_000,
     maxTvl:            u.maxTvl !== undefined ? u.maxTvl : 150_000,
     minVolume:         u.minVolume         ?? 500,
@@ -140,6 +143,10 @@ export const config = {
     requireKol: gmgnValue("requireKol", "gmgnRequireKol", true),
     minKolCount: gmgnValue("minKolCount", "gmgnMinKolCount", 1),
     maxRugRatio: gmgnValue("maxRugRatio", "gmgnMaxRugRatio", 0.3),
+    // creator_hold gate: dev still holding tokens. Log-only until enough loser
+    // samples confirm the 2026-06-11 winner/loser split (23% vs 71%).
+    creatorHoldGate: gmgnValue("creatorHoldGate", "gmgnCreatorHoldGate", true),
+    creatorHoldGateLogOnly: gmgnValue("creatorHoldGateLogOnly", "gmgnCreatorHoldGateLogOnly", true),
     maxTop10HolderRate: gmgnValue("maxTop10HolderRate", "gmgnMaxTop10HolderRate", 0.5),
     maxBundlerRate: gmgnValue("maxBundlerRate", "gmgnMaxBundlerRate", 0.5),
     maxRatTraderRate: gmgnValue("maxRatTraderRate", "gmgnMaxRatTraderRate", 0.2),

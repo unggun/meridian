@@ -818,6 +818,15 @@ export async function runScreeningCycle({ silent = false } = {}) {
           smart_wallets_present: (sw?.in_pool?.length ?? 0) > 0,
           narrative_quality:     n?.narrative ? "present" : "absent",
           volatility:            pool.volatility            ?? null,
+          // GMGN Stage1 security/dev fields — rank is a live list, unrecoverable later
+          rug_ratio:             pool.gmgn_rug_ratio        ?? null,
+          creator_token_status:  pool.gmgn_creator_token_status ?? null,
+          sniper_count:          pool.gmgn_sniper_count     ?? null,
+          insider_pct:           pool.gmgn_insider_pct      ?? null,
+          wash_trading:          pool.gmgn_wash_trading     ?? null,
+          creator_open_count:    pool.gmgn_creator_open_count ?? null,
+          twitter_create_token_count: pool.gmgn_twitter_create_token_count ?? null,
+          dev:                   pool.dev                   ?? null,
         });
       }
 

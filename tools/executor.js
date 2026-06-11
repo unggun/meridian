@@ -168,6 +168,21 @@ async function validateDeployPoolThresholds(args) {
     };
   }
 
+  // Volatility band gate — mid-band (4-6) deploys were the only losing cohort in June 2026.
+  // Log-only by default so we can validate the band on forward data before enforcing.
+  const volGateMin = numberOrNull(config.screening.volatilityGateMin);
+  const volGateMax = numberOrNull(config.screening.volatilityGateMax);
+  if (volGateMin != null && volGateMax != null && volatility >= volGateMin && volatility <= volGateMax) {
+    if (config.screening.volatilityGateLogOnly !== false) {
+      log("deploy", `Volatility band gate (log-only): WOULD block ${args.pool_address} — ${volatilityTimeframe} volatility ${volatility} in blocked band [${volGateMin}, ${volGateMax}]`);
+    } else {
+      return {
+        pass: false,
+        reason: `Pool ${volatilityTimeframe} volatility ${volatility} is inside the blocked band [${volGateMin}, ${volGateMax}] (volatilityGate).`,
+      };
+    }
+  }
+
   const actualBinStep = poolDetailBinStep(detail);
   const minStep = numberOrNull(config.screening.minBinStep);
   const maxStep = numberOrNull(config.screening.maxBinStep);
@@ -329,6 +344,9 @@ const toolMap = {
       maxTokenAgeHours: ["screening", "maxTokenAgeHours"],
       minFeeTvlRatio24h: ["screening", "minFeeTvlRatio24h"],
       fee24hGateLogOnly: ["screening", "fee24hGateLogOnly"],
+      volatilityGateMin: ["screening", "volatilityGateMin"],
+      volatilityGateMax: ["screening", "volatilityGateMax"],
+      volatilityGateLogOnly: ["screening", "volatilityGateLogOnly"],
       minFeePerTvl24h: ["management", "minFeePerTvl24h"],
       // management
       minClaimAmount: ["management", "minClaimAmount"],
@@ -421,6 +439,8 @@ const toolMap = {
       gmgnMaxTop10HolderRate: ["gmgn", "maxTop10HolderRate"],
       gmgnMaxBundlerRate: ["gmgn", "maxBundlerRate"],
       gmgnMaxRatTraderRate: ["gmgn", "maxRatTraderRate"],
+      gmgnCreatorHoldGate: ["gmgn", "creatorHoldGate"],
+      gmgnCreatorHoldGateLogOnly: ["gmgn", "creatorHoldGateLogOnly"],
       gmgnMaxFreshWalletRate: ["gmgn", "maxFreshWalletRate"],
       gmgnMaxDevTeamHoldRate: ["gmgn", "maxDevTeamHoldRate"],
       gmgnMaxBotDegenRate: ["gmgn", "maxBotDegenRate"],

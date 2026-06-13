@@ -3,6 +3,7 @@ import { REPO_ROOT, repoPath } from "./repo-root.js";
 import { getScreeningDefaultsForTimeframe, normalizeTimeframe, scaleScreeningToTimeframe, TIMEFRAME_SCREENING_SCALES } from "./screening-scales.js";
 
 export { REPO_ROOT, repoPath, getScreeningDefaultsForTimeframe, normalizeTimeframe, scaleScreeningToTimeframe, TIMEFRAME_SCREENING_SCALES };
+import { normalizeStrategyMix } from "./tools/liquidity-blend.js";
 
 const USER_CONFIG_PATH = repoPath("user-config.json");
 const GMGN_CONFIG_PATH = repoPath("gmgn-config.json");
@@ -253,6 +254,7 @@ export const config = {
   // ─── Strategy Mapping ───────────────────
   strategy: {
     strategy:     u.strategy     ?? "bid_ask",
+    strategyMix:  normalizeStrategyMix(u.strategyMix),
     minBinsBelow: strategyMinBinsBelow,
     maxBinsBelow: strategyMaxBinsBelow,
     defaultBinsBelow: strategyDefaultBinsBelow,
@@ -431,6 +433,7 @@ export function reloadScreeningThresholds() {
       config.strategy.minBinsBelow,
       Math.min(config.strategy.maxBinsBelow, Math.round(defaultBinsBelow)),
     );
+    if (fresh.strategyMix !== undefined) config.strategy.strategyMix = normalizeStrategyMix(fresh.strategyMix);
   } catch { /* ignore */ }
   try {
     const freshGmgn = readJsonIfExists(GMGN_CONFIG_PATH);

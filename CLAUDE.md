@@ -69,12 +69,15 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 | Key | Section | Default |
 |-----|---------|---------|
 | minFeeActiveTvlRatio | screening | 0.05 |
+| volatilityGateMin / volatilityGateMax | screening | null (off) — blocked deploy-volatility band |
+| volatilityGateLogOnly | screening | true — log would-blocks, don't enforce |
 | minTvl / maxTvl | screening | 10k / 150k |
 | minVolume | screening | 500 |
 | minOrganic | screening | 60 |
 | minHolders | screening | 500 |
 | minMcap / maxMcap | screening | 150k / 10M |
 | minBinStep / maxBinStep | screening | 80 / 125 |
+| strategyMix | strategy | null (off) — blend e.g. `{"bid_ask":0.8,"spot":0.2}` |
 | timeframe | screening | "5m" |
 | category | screening | "trending" |
 | minTokenFeesSol | screening | 30 |
@@ -136,6 +139,25 @@ clamped to [minBinsBelow, maxBinsBelow]
 - Low valid volatility → minBinsBelow
 - High volatility (5+) → maxBinsBelow
 - Any value in between is valid (continuous, not tiered)
+
+---
+
+## Strategy Blend (strategyMix)
+
+`config.strategy.strategyMix` blends liquidity shapes into ONE position via a custom per-bin
+weight distribution (`tools/liquidity-blend.js` → SDK `calculate*Distribution` +
+`initializePositionAndAddLiquidityByWeight`). Config-default-only: applies to every deploy when
+set; `null`/`{}`/a single-shape (degenerate) value = current single-strategy behavior.
+
+- Shape: `{"bid_ask":0.8,"spot":0.2}` — shapes in `{spot,bid_ask,curve}`, fractions sum to 1,
+  ≥2 shapes. Set via `/setcfg strategyMix {"bid_ask":0.8,"spot":0.2}`; clear with
+  `/setcfg strategyMix null`.
+- Blended deploys **bypass the LPAgent relay** (the zap-in API can't carry a custom weight
+  array; single-sided SOL deploys need no zap-in swap, so nothing is lost) and use the atomic
+  **≤69-bin** path only (blend + >69 bins throws — already prevented by the bins_below cap).
+- Tracking unchanged: a single-sided SOL blend still tracks as `single_sided_reseed`.
+- Validation lives in `normalizeStrategyMix` (rejects bad blends at set-time; deploy-time falls
+  back to the single strategy).
 
 ---
 

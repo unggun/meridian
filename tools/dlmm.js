@@ -29,6 +29,7 @@ import { normalizeMint } from "./wallet.js";
 import { appendDecision } from "../decision-log.js";
 import { getAndClearStagedSignals } from "../signal-tracker.js";
 import { computePositions, fetchDlmmPnlForPool } from "./pnl.js";
+import { buildBlendedDistribution } from "./liquidity-blend.js";
 
 // ─── Lazy SDK loader ───────────────────────────────────────────
 // @meteora-ag/dlmm → @coral-xyz/anchor uses CJS directory imports
@@ -592,6 +593,13 @@ export async function deployPosition({
 }) {
   pool_address = normalizeMint(pool_address);
   const activeStrategy = strategy || config.strategy.strategy;
+  // config.strategy.strategyMix is already normalized to a valid blend object (≥2 shapes,
+  // fractions sum to 1) or null by config.js at load + hot-reload — so it can't be malformed
+  // here, and buildBlendedDistribution won't throw on it. A degenerate/invalid value never
+  // reaches this point (it normalizes to null), which is the intended fall-back to the single
+  // strategy path; the cron is never stalled by a bad config value.
+  const strategyMix = config.strategy.strategyMix || null;
+  const isBlend = strategyMix != null;
   let activeBinsBelow = bins_below ?? config.strategy.defaultBinsBelow ?? config.strategy.minBinsBelow;
   let activeBinsAbove = bins_above ?? 0;
   const parsedVolatility = volatility == null ? null : Number(volatility);
@@ -702,12 +710,31 @@ export async function deployPosition({
     throw new Error(`Invalid strategy: ${activeStrategy}. Use spot, curve, or bid_ask.`);
   }
 
+  const isWideRange = totalBins > 69;
+  const minBinId = activeBin.binId - activeBinsBelow;
+  const maxBinId = isSingleSidedSol ? activeBin.binId : activeBin.binId + activeBinsAbove;
+
+  if (isBlend && isWideRange) {
+    throw new Error(
+      `Blended deploys require ≤69 bins (no weight-chunkable wide path). totalBins=${totalBins}. Narrow the range or clear strategyMix.`,
+    );
+  }
+
   if (process.env.DRY_RUN === "true") {
     return {
       dry_run: true,
       would_deploy: {
         pool_address,
         strategy: activeStrategy,
+        strategy_mix: isBlend ? strategyMix : null,
+        via: isBlend ? "weight" : "strategy",
+        distribution_preview: isBlend
+          ? buildBlendedDistribution(
+              activeBin.binId,
+              Array.from({ length: maxBinId - minBinId + 1 }, (_, i) => minBinId + i),
+              strategyMix,
+            ).map((b) => ({ binId: b.binId, yBps: Number(b.yAmountBpsOfTotal) }))
+          : null,
         bins_below: activeBinsBelow,
         bins_above: activeBinsAbove,
         downside_pct: downside_pct ?? null,
@@ -719,10 +746,6 @@ export async function deployPosition({
       message: "DRY RUN — no transaction sent",
     };
   }
-
-  const isWideRange = totalBins > 69;
-  const minBinId = activeBin.binId - activeBinsBelow;
-  const maxBinId = isSingleSidedSol ? activeBin.binId : activeBin.binId + activeBinsAbove;
 
   if (minBinId > maxBinId) {
     throw new Error(`Invalid bin range: ${minBinId} -> ${maxBinId}`);
@@ -755,7 +778,7 @@ export async function deployPosition({
     totalXLamports = new BN(Math.floor(finalAmountX * Math.pow(10, decimals)));
   }
 
-  if (shouldUseLpAgentRelayForDeploy()) {
+  if (shouldUseLpAgentRelayForDeploy() && !isBlend) {
     try {
       const wallet = getWallet();
       log(
@@ -958,6 +981,24 @@ export async function deployPosition({
           log("deploy_rollback_error", `Failed to close empty position ${newPosition.publicKey.toString()}: ${rollbackError.message}. Rent (~0.062 SOL) is locked until manually closed.`);
         }
         throw phase2Error;
+      }
+    } else if (isBlend) {
+      // ── Blended Path (≤69 bins, custom weight distribution) ──────
+      const binIds = Array.from({ length: maxBinId - minBinId + 1 }, (_, i) => minBinId + i);
+      const xYAmountDistribution = buildBlendedDistribution(activeBin.binId, binIds, strategyMix);
+      log("deploy", `Blend ${JSON.stringify(strategyMix)} over ${binIds.length} bins via weight path`);
+      const tx = await pool.initializePositionAndAddLiquidityByWeight({
+        positionPubKey: newPosition.publicKey,
+        user: wallet.publicKey,
+        totalXAmount: totalXLamports,
+        totalYAmount: totalYLamports,
+        xYAmountDistribution,
+        slippage: 1000, // 10% in bps
+      });
+      const txArray = Array.isArray(tx) ? tx : [tx];
+      for (const single of txArray) {
+        const txHash = await sendAndConfirmTransaction(getConnection(), single, [wallet, newPosition]);
+        txHashes.push(txHash);
       }
     } else {
       // ── Standard Path (≤69 bins) ─────────────────────────────────

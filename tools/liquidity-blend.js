@@ -82,9 +82,15 @@ function normalizeBpsToTotal(raw) {
   const rounded = raw.map((v) => Math.round(v));
   const diff = 10000 - rounded.reduce((s, v) => s + v, 0);
   if (diff !== 0) {
-    // assign remainder to the largest-weight bin
+    // Pick the max-weight bin over the PRE-rounding floats (not the rounded ints) and,
+    // on ties, keep the first index — intentional, so the choice is deterministic and
+    // independent of rounding artifacts.
     let maxIdx = 0;
     for (let i = 1; i < raw.length; i++) if (raw[i] > raw[maxIdx]) maxIdx = i;
+    // Invariant: rounded[maxIdx] += diff can never drive a bin negative. Each bin's
+    // rounding error is in (-0.5, 0.5], so |diff| ≤ ⌈N/2⌉ (≤ 35 at the 69-bin cap),
+    // while the max-weight bin holds the largest share of 10000 bps — far more than the
+    // tiny remainder. No clamp needed.
     rounded[maxIdx] += diff;
   }
   return rounded;

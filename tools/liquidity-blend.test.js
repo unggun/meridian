@@ -90,6 +90,25 @@ test("degenerate-equivalent weights reproduce a pure SDK distribution (parity)",
   assert.equal(ySum(dist), 10000);
 });
 
+test("remainder branch: raw rounding sum != 10000 → corrected to 10000, remainder on max-weight bin", () => {
+  // 6-bin range whose per-bin float bps round to 9999 (diff = +1) before correction.
+  // The largest blended y-weight is bin 995 (index 0), so the +1 remainder lands there.
+  const bins6 = [995, 996, 997, 998, 999, 1000];
+  const dist = buildBlendedDistribution(ACTIVE, bins6, { bid_ask: 0.8, spot: 0.2 });
+  const yBps = dist.map((b) => Number(b.yAmountBpsOfTotal));
+  // Pre-correction rounding would be [7884,785,408,372,367,183] (sum 9999); +1 → bin 995.
+  assert.deepEqual(yBps, [7885, 785, 408, 372, 367, 183]);
+  assert.equal(ySum(dist), 10000);
+});
+
+test("curve included: bid_ask/spot/curve blend over single-sided range → y sums to 10000, x all zero", () => {
+  // Strictly-below-active range so the x side is all zeros; exercises calculateNormalDistribution.
+  const bins = [996, 997, 998, 999];
+  const dist = buildBlendedDistribution(ACTIVE, bins, { bid_ask: 0.5, spot: 0.3, curve: 0.2 });
+  assert.equal(ySum(dist), 10000);
+  assert.deepEqual(dist.map((b) => Number(b.xAmountBpsOfTotal)), [0, 0, 0, 0]);
+});
+
 test("returns BN instances for both sides", () => {
   const dist = buildBlendedDistribution(ACTIVE, BINS, { bid_ask: 0.8, spot: 0.2 });
   assert.equal(typeof dist[0].yAmountBpsOfTotal.toString, "function");

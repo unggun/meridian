@@ -713,6 +713,7 @@ export async function deployPosition({
   const isWideRange = totalBins > 69;
   const minBinId = activeBin.binId - activeBinsBelow;
   const maxBinId = isSingleSidedSol ? activeBin.binId : activeBin.binId + activeBinsAbove;
+  const binIds = Array.from({ length: maxBinId - minBinId + 1 }, (_, i) => minBinId + i);
 
   if (isBlend && isWideRange) {
     throw new Error(
@@ -731,7 +732,7 @@ export async function deployPosition({
         distribution_preview: isBlend
           ? buildBlendedDistribution(
               activeBin.binId,
-              Array.from({ length: maxBinId - minBinId + 1 }, (_, i) => minBinId + i),
+              binIds,
               strategyMix,
             ).map((b) => ({ binId: b.binId, yBps: Number(b.yAmountBpsOfTotal) }))
           : null,
@@ -984,7 +985,6 @@ export async function deployPosition({
       }
     } else if (isBlend) {
       // ── Blended Path (≤69 bins, custom weight distribution) ──────
-      const binIds = Array.from({ length: maxBinId - minBinId + 1 }, (_, i) => minBinId + i);
       const xYAmountDistribution = buildBlendedDistribution(activeBin.binId, binIds, strategyMix);
       log("deploy", `Blend ${JSON.stringify(strategyMix)} over ${binIds.length} bins via weight path`);
       const tx = await pool.initializePositionAndAddLiquidityByWeight({

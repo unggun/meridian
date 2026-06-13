@@ -23,6 +23,7 @@ import { addSmartWallet, removeSmartWallet, listSmartWallets, checkSmartWalletsO
 import { getTokenInfo, getTokenHolders, getTokenNarrative } from "./token.js";
 import { confirmIndicatorPreset } from "./chart-indicators.js";
 import { config, reloadScreeningThresholds, MIN_SAFE_BINS_BELOW } from "../config.js";
+import { normalizeStrategyMix } from "./liquidity-blend.js";
 import { getRecentDecisions } from "../decision-log.js";
 import fs from "fs";
 import { execSync, spawn } from "child_process";
@@ -311,6 +312,21 @@ const toolMap = {
     return { error: "invalid mode" };
   },
   update_config: ({ changes, reason = "" }) => {
+    // strategyMix must be a valid blend (or null/{} to clear). Reject malformed values
+    // at set-time so a bad blend never persists, and store the normalized form.
+    if (changes && Object.prototype.hasOwnProperty.call(changes, "strategyMix")) {
+      const raw = changes.strategyMix;
+      const isClear = raw == null || (typeof raw === "object" && !Array.isArray(raw) && Object.keys(raw).length === 0);
+      const normalized = normalizeStrategyMix(raw);
+      if (!isClear && normalized == null) {
+        return {
+          success: false,
+          reason,
+          error: 'Invalid strategyMix. Expect e.g. {"bid_ask":0.8,"spot":0.2}: shapes in {spot,bid_ask,curve}, fractions ≥0 summing to 1, at least two shapes. Use null or {} to clear.',
+        };
+      }
+      changes = { ...changes, strategyMix: normalized };
+    }
     // Flat key → config section mapping (covers everything in config.js)
     const CONFIG_MAP = {
       // screening
@@ -401,6 +417,7 @@ const toolMap = {
       maxSteps: ["llm", "maxSteps"],
       // strategy
       strategy:     ["strategy", "strategy"],
+      strategyMix:  ["strategy", "strategyMix"],
       binsBelow:    ["strategy", "maxBinsBelow", ["maxBinsBelow"]],
       minBinsBelow: ["strategy", "minBinsBelow"],
       maxBinsBelow: ["strategy", "maxBinsBelow"],

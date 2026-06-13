@@ -1,9 +1,9 @@
 import fs from "fs";
 import { REPO_ROOT, repoPath } from "./repo-root.js";
 import { getScreeningDefaultsForTimeframe, normalizeTimeframe, scaleScreeningToTimeframe, TIMEFRAME_SCREENING_SCALES } from "./screening-scales.js";
+import { normalizeStrategyMix } from "./tools/liquidity-blend.js";
 
 export { REPO_ROOT, repoPath, getScreeningDefaultsForTimeframe, normalizeTimeframe, scaleScreeningToTimeframe, TIMEFRAME_SCREENING_SCALES };
-import { normalizeStrategyMix } from "./tools/liquidity-blend.js";
 
 const USER_CONFIG_PATH = repoPath("user-config.json");
 const GMGN_CONFIG_PATH = repoPath("gmgn-config.json");

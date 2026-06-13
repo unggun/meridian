@@ -316,6 +316,7 @@ const toolMap = {
     // at set-time so a bad blend never persists, and store the normalized form.
     if (changes && Object.prototype.hasOwnProperty.call(changes, "strategyMix")) {
       const raw = changes.strategyMix;
+      // normalizeStrategyMix returns null for both an intentional clear AND a malformed value, so isClear (null/{}) is what tells "operator cleared the blend → store null, no error" apart from "bad value → reject".
       const isClear = raw == null || (typeof raw === "object" && !Array.isArray(raw) && Object.keys(raw).length === 0);
       const normalized = normalizeStrategyMix(raw);
       if (!isClear && normalized == null) {

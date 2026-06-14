@@ -7,10 +7,35 @@ import BN from "bn.js";
 const sdk = { ...(dlmmSdk.default ?? {}), ...dlmmSdk };
 const { calculateSpotDistribution, calculateBidAskDistribution, calculateNormalDistribution } = sdk;
 
+// Linear "triangle" ramp: per-bin weight grows linearly with distance from the active bin
+// (max at the far edge, 0 at the active bin), normalized to 10000 bps per side. This matches
+// the by-strategy StrategyType.BidAsk on-chain shape — unlike the SDK's
+// calculateBidAskDistribution, which is an EXPONENTIAL spike (~98% in the far third). Same
+// {binId, xAmountBpsOfTotal, yAmountBpsOfTotal} contract as the SDK calculators so it slots
+// into BLEND_SHAPES and buildBlendedDistribution unchanged. (See memory: bid_ask two paths.)
+function calculateTriangleDistribution(activeBin, binIds) {
+  const belowW = binIds.map((b) => (b < activeBin ? activeBin - b : 0));
+  const aboveW = binIds.map((b) => (b > activeBin ? b - activeBin : 0));
+  // Scale each side's linear weights to ~10000 bps before normalizeBpsToTotal (which only
+  // fixes integer rounding — it does NOT rescale, it dumps the remainder on the max-weight bin).
+  const toBps = (w) => {
+    const sum = w.reduce((s, v) => s + v, 0);
+    return sum > 0 ? w.map((v) => (v / sum) * 10000) : w.map(() => 0);
+  };
+  const yBps = normalizeBpsToTotal(toBps(belowW));
+  const xBps = normalizeBpsToTotal(toBps(aboveW));
+  return binIds.map((binId, i) => ({
+    binId,
+    xAmountBpsOfTotal: xBps[i],
+    yAmountBpsOfTotal: yBps[i],
+  }));
+}
+
 export const BLEND_SHAPES = {
   spot: calculateSpotDistribution,
   bid_ask: calculateBidAskDistribution,
   curve: calculateNormalDistribution,
+  triangle: calculateTriangleDistribution,
 };
 
 const SUM_TOLERANCE = 0.001;

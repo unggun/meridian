@@ -149,9 +149,15 @@ weight distribution (`tools/liquidity-blend.js` → SDK `calculate*Distribution`
 `initializePositionAndAddLiquidityByWeight`). Config-default-only: applies to every deploy when
 set; `null`/`{}`/a single-shape (degenerate) value = current single-strategy behavior.
 
-- Shape: `{"bid_ask":0.8,"spot":0.2}` — shapes in `{spot,bid_ask,curve}`, fractions sum to 1,
-  ≥2 shapes. Set via `/setcfg strategyMix {"bid_ask":0.8,"spot":0.2}`; clear with
+- Shape: `{"bid_ask":0.8,"spot":0.2}` — shapes in `{spot,bid_ask,curve,triangle}`, fractions
+  sum to 1, ≥2 shapes. Set via `/setcfg strategyMix {"bid_ask":0.8,"spot":0.2}`; clear with
   `/setcfg strategyMix null`.
+- **`bid_ask` vs `triangle`:** the SDK's `calculateBidAskDistribution` (used by `bid_ask` in a
+  blend) is an EXPONENTIAL spike (~98% of weight in the far third). `triangle` is a custom LINEAR
+  ramp (`calculateTriangleDistribution` in `tools/liquidity-blend.js`) that matches the
+  by-strategy `StrategyType.BidAsk` on-chain shape a normal (non-blend) deploy produces. Use
+  `triangle` in a blend (e.g. `{"triangle":0.8,"spot":0.2}`) for a linear ramp + spot floor;
+  `bid_ask` gives the deep-edge spike. Regression: `test/blend-triangle.test.js`.
 - Blended deploys **bypass the LPAgent relay** (the zap-in API can't carry a custom weight
   array; single-sided SOL deploys need no zap-in swap, so nothing is lost) and use the
   `initializePositionAndAddLiquidityByWeight` path (≤69 bins; blend + >69 bins routes to the

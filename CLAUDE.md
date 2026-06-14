@@ -169,6 +169,12 @@ set; `null`/`{}`/a single-shape (degenerate) value = current single-strategy beh
   the position (e.g. the unwrap-SOL cleanup) throws web3.js `unknown signer`. On partial failure
   the branch best-effort `closePosition()` rolls back, mirroring the wide-range path. Regression:
   `test/blend-signers.test.js`.
+- **The dependent txs must NOT be preflight-simulated.** Right after the create tx confirms, the
+  RPC node running the next tx's client-side preflight may not have observed the new position
+  account yet → preflight fails with AnchorError `AccountOwnedByWrongProgram` (3007 / 0xbbf) even
+  though the tx would execute fine (the SDK builds these expecting no simulation). So preflight
+  ONLY the create tx and pass `skipPreflight: true` on the rest (`blendSkipPreflight` =
+  `!txNeedsPositionSigner`). Execution stays safe — the create tx is confirmed first.
 - Tracking unchanged: a single-sided SOL blend still tracks as `single_sided_reseed`.
 - Validation lives in `normalizeStrategyMix` (rejects bad blends at set-time; deploy-time falls
   back to the single strategy).

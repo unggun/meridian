@@ -29,7 +29,7 @@ import { normalizeMint } from "./wallet.js";
 import { appendDecision } from "../decision-log.js";
 import { getAndClearStagedSignals } from "../signal-tracker.js";
 import { computePositions, fetchDlmmPnlForPool } from "./pnl.js";
-import { buildBlendedDistribution, txNeedsPositionSigner } from "./liquidity-blend.js";
+import { buildBlendedDistribution, txNeedsPositionSigner, blendSkipPreflight } from "./liquidity-blend.js";
 
 // ─── Lazy SDK loader ───────────────────────────────────────────
 // @meteora-ag/dlmm → @coral-xyz/anchor uses CJS directory imports
@@ -1008,10 +1008,13 @@ export async function deployPosition({
       // liquidity already landed, closePosition fails and we log the locked funds/rent.
       try {
         for (let i = 0; i < txArray.length; i++) {
-          const signers = txNeedsPositionSigner(txArray[i], newPosition.publicKey)
-            ? [wallet, newPosition]
-            : [wallet];
-          const txHash = await sendAndConfirmTransaction(getConnection(), txArray[i], signers);
+          const needsPosition = txNeedsPositionSigner(txArray[i], newPosition.publicKey);
+          const signers = needsPosition ? [wallet, newPosition] : [wallet];
+          // Dependent txs can't be preflight-simulated before the position propagates — skip
+          // preflight on them (they execute fine; the create tx is already confirmed).
+          const txHash = await sendAndConfirmTransaction(getConnection(), txArray[i], signers, {
+            skipPreflight: blendSkipPreflight(txArray[i], newPosition.publicKey),
+          });
           txHashes.push(txHash);
           log("deploy", `Blend tx ${i + 1}/${txArray.length}: ${txHash}`);
         }

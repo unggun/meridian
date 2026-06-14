@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Keypair } from "@solana/web3.js";
-import { txNeedsPositionSigner } from "../tools/liquidity-blend.js";
+import { txNeedsPositionSigner, blendSkipPreflight } from "../tools/liquidity-blend.js";
 
 const position = Keypair.generate().publicKey;
 const wallet = Keypair.generate().publicKey;
@@ -57,4 +57,13 @@ test("single-sided SOL blend array signs exactly one tx with the position", () =
 test("tolerates missing instructions/keys without throwing", () => {
   assert.equal(txNeedsPositionSigner({}, position), false);
   assert.equal(txNeedsPositionSigner({ instructions: [{}] }, position), false);
+});
+
+// The dependent txs (addLiquidity, unwrap) reference the position account, which the RPC node
+// may not have observed yet right after the create tx confirms — client-side preflight then
+// fails with AccountOwnedByWrongProgram (3007). So preflight ONLY the position-creating tx.
+test("preflight only the position-creating tx; skip preflight on dependent txs", () => {
+  assert.equal(blendSkipPreflight(preInstructionsTx, position), false); // create → preflight
+  assert.equal(blendSkipPreflight(mainTx, position), true); // addLiquidity → skip
+  assert.equal(blendSkipPreflight(postInstructionsTx, position), true); // unwrap → skip
 });

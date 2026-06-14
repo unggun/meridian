@@ -135,3 +135,15 @@ export function txNeedsPositionSigner(tx, positionPubkey) {
     (ix?.keys ?? []).some((k) => k.isSigner && k.pubkey?.equals(positionPubkey)),
   );
 }
+
+// Whether to skip web3.js client-side PREFLIGHT simulation for a blend tx. The dependent txs
+// (addLiquidity, unwrap) reference the position account created by the EARLIER create tx; right
+// after that create tx confirms, the RPC node running the next tx's preflight may not have
+// observed the new account yet (propagation lag behind a load-balanced endpoint), so the
+// preflight fails with AnchorError AccountOwnedByWrongProgram (3007 / 0xbbf) even though the tx
+// would execute fine. The SDK builds these dependent txs expecting they are NOT simulated. So
+// preflight ONLY the position-creating tx (the one that needs the position signer) and skip it
+// on the rest. Execution stays safe: the create tx is confirmed before the dependent tx is sent.
+export function blendSkipPreflight(tx, positionPubkey) {
+  return !txNeedsPositionSigner(tx, positionPubkey);
+}

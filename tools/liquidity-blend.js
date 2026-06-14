@@ -95,3 +95,18 @@ function normalizeBpsToTotal(raw) {
   }
   return rounded;
 }
+
+// The blend deploy uses `initializePositionAndAddLiquidityByWeight`, which splits at the
+// SDK's MAX_BIN_LENGTH_ALLOWED_IN_ONE_TX (26 bins) into an array of transactions:
+// [preInstructionsTx (initializePosition — the new position account IS a required signer),
+//  mainTx (addLiquidity — position referenced as a NON-signer),
+//  postInstructionsTx (unwrap WSOL — position not referenced at all)].
+// Signing a tx with the position keypair when the tx doesn't reference it as a signer makes
+// web3.js throw `unknown signer: <position>` (it threw on the unwrap-SOL tx, 2026-06-14).
+// So sign each tx with the position keypair ONLY when it actually requires that signature.
+// Robust to tx count/order, unlike a positional `i === 0` check.
+export function txNeedsPositionSigner(tx, positionPubkey) {
+  return (tx?.instructions ?? []).some((ix) =>
+    (ix?.keys ?? []).some((k) => k.isSigner && k.pubkey?.equals(positionPubkey)),
+  );
+}

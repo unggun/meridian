@@ -29,7 +29,7 @@ import { normalizeMint } from "./wallet.js";
 import { appendDecision } from "../decision-log.js";
 import { getAndClearStagedSignals } from "../signal-tracker.js";
 import { computePositions, fetchDlmmPnlForPool } from "./pnl.js";
-import { buildBlendedDistribution } from "./liquidity-blend.js";
+import { buildBlendedDistribution, txNeedsPositionSigner } from "./liquidity-blend.js";
 
 // ─── Lazy SDK loader ───────────────────────────────────────────
 // @meteora-ag/dlmm → @coral-xyz/anchor uses CJS directory imports
@@ -985,7 +985,13 @@ export async function deployPosition({
         throw phase2Error;
       }
     } else if (isBlend) {
-      // ── Blended Path (≤69 bins, custom weight distribution) ──────
+      // ── Blended Path (custom weight distribution, ≤69 bins) ──────
+      // NOT atomic above the SDK's 26-bin tx limit (MAX_BIN_LENGTH_ALLOWED_IN_ONE_TX):
+      // initializePositionAndAddLiquidityByWeight then returns an array
+      // [createPositionTx, addLiquidityTx, unwrapSolTx?]. Sign each tx with the position
+      // keypair ONLY when it actually requires it (txNeedsPositionSigner) — signing a tx
+      // that doesn't reference the position (e.g. the unwrap-SOL cleanup) throws web3.js
+      // `unknown signer` (the 2026-06-14 deploy failure). Same convention as the wide path.
       const xYAmountDistribution = buildBlendedDistribution(activeBin.binId, binIds, strategyMix);
       log("deploy", `Blend ${JSON.stringify(strategyMix)} over ${binIds.length} bins via weight path`);
       const tx = await pool.initializePositionAndAddLiquidityByWeight({
@@ -997,9 +1003,31 @@ export async function deployPosition({
         slippage: 1000, // 10% in bps
       });
       const txArray = Array.isArray(tx) ? tx : [tx];
-      for (const single of txArray) {
-        const txHash = await sendAndConfirmTransaction(getConnection(), single, [wallet, newPosition]);
-        txHashes.push(txHash);
+      // Multi-tx blend is non-atomic: if a later tx fails after the position was created,
+      // roll back the (possibly empty) position so we don't leak rent. Best-effort — if
+      // liquidity already landed, closePosition fails and we log the locked funds/rent.
+      try {
+        for (let i = 0; i < txArray.length; i++) {
+          const signers = txNeedsPositionSigner(txArray[i], newPosition.publicKey)
+            ? [wallet, newPosition]
+            : [wallet];
+          const txHash = await sendAndConfirmTransaction(getConnection(), txArray[i], signers);
+          txHashes.push(txHash);
+          log("deploy", `Blend tx ${i + 1}/${txArray.length}: ${txHash}`);
+        }
+      } catch (blendError) {
+        log("deploy_error", `Blend deploy failed: ${blendError.message}. Rolling back position ${newPosition.publicKey.toString()}.`);
+        try {
+          const rollbackTx = await pool.closePosition({
+            owner: wallet.publicKey,
+            position: { publicKey: newPosition.publicKey },
+          });
+          const rollbackHash = await sendAndConfirmTransaction(getConnection(), rollbackTx, [wallet]);
+          log("deploy_rollback", `Closed position after blend failure: ${rollbackHash}`);
+        } catch (rollbackError) {
+          log("deploy_rollback_error", `Failed to close position ${newPosition.publicKey.toString()}: ${rollbackError.message}. Funds/rent locked until manually closed.`);
+        }
+        throw blendError;
       }
     } else {
       // ── Standard Path (≤69 bins) ─────────────────────────────────

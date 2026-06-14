@@ -153,8 +153,16 @@ set; `null`/`{}`/a single-shape (degenerate) value = current single-strategy beh
   ≥2 shapes. Set via `/setcfg strategyMix {"bid_ask":0.8,"spot":0.2}`; clear with
   `/setcfg strategyMix null`.
 - Blended deploys **bypass the LPAgent relay** (the zap-in API can't carry a custom weight
-  array; single-sided SOL deploys need no zap-in swap, so nothing is lost) and use the atomic
-  **≤69-bin** path only (blend + >69 bins throws — already prevented by the bins_below cap).
+  array; single-sided SOL deploys need no zap-in swap, so nothing is lost) and use the
+  `initializePositionAndAddLiquidityByWeight` path (≤69 bins; blend + >69 bins routes to the
+  wide-range path instead — prevented here by the bins_below cap).
+- **This path is NOT atomic.** Above the SDK's `MAX_BIN_LENGTH_ALLOWED_IN_ONE_TX` (26 bins) it
+  returns an ARRAY `[createPositionTx, addLiquidityTx, unwrapSolTx?]`, so a typical 30-70-bin
+  blend is multiple dependent txs. Sign each with the position keypair ONLY when it requires it
+  (`txNeedsPositionSigner` in `tools/liquidity-blend.js`) — signing a tx that doesn't reference
+  the position (e.g. the unwrap-SOL cleanup) throws web3.js `unknown signer`. On partial failure
+  the branch best-effort `closePosition()` rolls back, mirroring the wide-range path. Regression:
+  `test/blend-signers.test.js`.
 - Tracking unchanged: a single-sided SOL blend still tracks as `single_sided_reseed`.
 - Validation lives in `normalizeStrategyMix` (rejects bad blends at set-time; deploy-time falls
   back to the single strategy).

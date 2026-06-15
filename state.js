@@ -11,6 +11,7 @@
 import fs from "fs";
 import { log } from "./logger.js";
 import { repoPath } from "./repo-root.js";
+import { peakJumpNeedsConfirmation } from "./peak-guard.js";
 
 const STATE_FILE = repoPath("state.json");
 
@@ -241,13 +242,19 @@ export function queuePeakConfirmation(position_address, candidatePnlPct, options
   const currentPeak = pos.peak_pnl_pct ?? 0;
   if (candidatePnlPct <= currentPeak) return false;
 
-  if (options.immediate) {
+  // Outlier guard: a peak that leaps more than maxJumpPct above the confirmed
+  // peak in a single tick is a likely present-but-wrong price tick. Refuse to
+  // accept it immediately even on the relay (immediate) path — force it through
+  // the pending → 15s-recheck path so a transient glitch can't arm trailing TP.
+  const isOutlier = peakJumpNeedsConfirmation(currentPeak, candidatePnlPct, options.maxJumpPct);
+
+  if (options.immediate && !isOutlier) {
     pos.peak_pnl_pct = candidatePnlPct;
     pos.pending_peak_pnl_pct = null;
     pos.pending_peak_started_at = null;
     save(state);
     log("state", `Position ${position_address} peak PnL accepted at ${candidatePnlPct.toFixed(2)}% from rpc poll`);
-    return true;
+    return "accepted";
   }
 
   const changed =
@@ -259,8 +266,9 @@ export function queuePeakConfirmation(position_address, candidatePnlPct, options
   pos.pending_peak_pnl_pct = candidatePnlPct;
   pos.pending_peak_started_at = new Date().toISOString();
   save(state);
-  log("state", `Position ${position_address} peak candidate ${candidatePnlPct.toFixed(2)}% queued for 15s confirmation`);
-  return true;
+  const outlierNote = options.immediate && isOutlier ? " (outlier single-tick jump — forcing recheck)" : "";
+  log("state", `Position ${position_address} peak candidate ${candidatePnlPct.toFixed(2)}% queued for 15s confirmation${outlierNote}`);
+  return "pending";
 }
 
 export function resolvePendingPeak(position_address, currentPnlPct, toleranceRatio = 0.85) {

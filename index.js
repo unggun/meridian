@@ -280,12 +280,16 @@ export async function runManagementCycle({ silent = false } = {}) {
     // JS trailing TP check
     const exitMap = new Map();
     for (const p of positionData) {
-      if (
-        !p.pnl_pct_suspicious &&
-        queuePeakConfirmation(p.position, p.pnl_pct, { immediate: !shouldUsePnlRecheck() }) &&
-        shouldUsePnlRecheck()
-      ) {
-        schedulePeakConfirmation(p.position);
+      if (!p.pnl_pct_suspicious) {
+        // "pending" → the peak needs a 15s recheck (relay off, OR an outlier
+        // single-tick jump the guard refused to accept immediately). Always
+        // schedule the recheck regardless of relay mode so a present-but-wrong
+        // tick can't silently set the peak and arm trailing TP.
+        const peakResult = queuePeakConfirmation(p.position, p.pnl_pct, {
+          immediate: !shouldUsePnlRecheck(),
+          maxJumpPct: config.management.peakOutlierMaxJumpPct,
+        });
+        if (peakResult === "pending") schedulePeakConfirmation(p.position);
       }
       const exit = updatePnlAndCheckExits(p.position, p, config.management);
       if (exit) {
@@ -1002,12 +1006,16 @@ Summarize the current portfolio health, total fees earned, and performance of al
       const result = await getMyPositions({ force: true, silent: true }).catch(() => null);
       if (!result?.positions?.length) return;
       for (const p of result.positions) {
-        if (
-          !p.pnl_pct_suspicious &&
-          queuePeakConfirmation(p.position, p.pnl_pct, { immediate: !shouldUsePnlRecheck() }) &&
-          shouldUsePnlRecheck()
-        ) {
-          schedulePeakConfirmation(p.position);
+        if (!p.pnl_pct_suspicious) {
+          // "pending" → the peak needs a 15s recheck (relay off, OR an outlier
+          // single-tick jump the guard refused to accept immediately). Always
+          // schedule the recheck regardless of relay mode so a present-but-wrong
+          // tick can't silently set the peak and arm trailing TP.
+          const peakResult = queuePeakConfirmation(p.position, p.pnl_pct, {
+            immediate: !shouldUsePnlRecheck(),
+            maxJumpPct: config.management.peakOutlierMaxJumpPct,
+          });
+          if (peakResult === "pending") schedulePeakConfirmation(p.position);
         }
         const exit = updatePnlAndCheckExits(p.position, p, config.management);
         if (exit) {

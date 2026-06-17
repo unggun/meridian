@@ -13,6 +13,7 @@ import { confirmIndicatorPreset, evaluateIntervalPreset, confirmSupertrendRollov
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
+import { partitionManagementActions } from "./management-routing.js";
 import {
   startPolling,
   stopPolling,
@@ -472,17 +473,48 @@ export async function runManagementCycle({ silent = false } = {}) {
     mgmtReport = reportLines.join("\n\n") +
       `\n\nSummary: 💼 ${positions.length} positions | ${cur}${totalValue.toFixed(4)} | fees: ${cur}${totalUnclaimed.toFixed(4)} | ${actionSummary}`;
 
-    // ── Call LLM only if action needed ──────────────────────────────
-    const actionPositions = positionData.filter(p => {
-      const a = actionMap.get(p.position);
-      return a.action !== "STAY";
+    // ── Execute actions ─────────────────────────────────────────────
+    // Deterministic CLOSE actions are executed directly in-process (no LLM): the
+    // rule has already fully decided to close, and routing through the LLM risked
+    // the model narrating the close in its reasoning without ever emitting the
+    // close_position tool call, leaving the position open while the report said
+    // CLOSE (TURTLE-SOL 2026-06-17). Only CLAIM / INSTRUCTION still need the LLM.
+    const actionEntries = positionData.map((p) => {
+      const act = actionMap.get(p.position);
+      return { p, act, action: act.action };
     });
+    const { directCloses, llmActions } = partitionManagementActions(actionEntries);
 
-    if (actionPositions.length > 0) {
-      log("cron", `Management: ${actionPositions.length} action(s) needed — invoking LLM [model: ${config.llm.managementModel}]`);
+    for (const { p, act } of directCloses) {
+      const reasonText = act.rule === "exit" ? `Trailing TP: ${act.reason}`
+        : act.rule === "chart_exit" ? `Chart exit: ${act.reason}`
+        : typeof act.rule === "number" ? `Rule ${act.rule}: ${act.reason}`
+        : (act.reason || "deterministic close");
+      log("cron", `Management: direct close ${p.pair} — ${reasonText}`);
+      await liveMessage?.toolStart("close_position");
+      try {
+        const result = await executeTool("close_position", {
+          position_address: p.position,
+          reason: `auto: ${reasonText}`,
+        });
+        const ok = result?.success !== false && !result?.error && !result?.blocked;
+        await liveMessage?.toolFinish("close_position", result, ok);
+        mgmtReport += ok
+          ? `\n\n✅ Closed ${p.pair} — ${reasonText}`
+          : `\n\n⚠️ Close FAILED for ${p.pair} — ${result?.error || result?.reason || "unknown error"}`;
+        if (!ok) log("cron_error", `Direct close failed for ${p.pair}: ${result?.error || result?.reason || "unknown"}`);
+      } catch (e) {
+        await liveMessage?.toolFinish("close_position", { error: e.message }, false);
+        mgmtReport += `\n\n⚠️ Close FAILED for ${p.pair} — ${e.message}`;
+        log("cron_error", `Direct close threw for ${p.pair}: ${e.message}`);
+      }
+    }
 
-      const actionBlocks = actionPositions.map((p) => {
-        const act = actionMap.get(p.position);
+    // ── Call LLM only for actions that need it (CLAIM / INSTRUCTION) ──
+    if (llmActions.length > 0) {
+      log("cron", `Management: ${llmActions.length} LLM action(s) needed — invoking LLM [model: ${config.llm.managementModel}]`);
+
+      const actionBlocks = llmActions.map(({ p, act }) => {
         return [
           `POSITION: ${p.pair} (${p.position})`,
           `  pool: ${p.pool}`,
@@ -494,17 +526,15 @@ export async function runManagementCycle({ silent = false } = {}) {
       }).join("\n\n");
 
       const { content } = await agentLoop(`
-MANAGEMENT ACTION REQUIRED — ${actionPositions.length} position(s)
+MANAGEMENT ACTION REQUIRED — ${llmActions.length} position(s)
 
 ${actionBlocks}
 
 RULES:
-- CLOSE: call close_position only — it handles fee claiming internally, do NOT call claim_fees first
 - CLAIM: call claim_fees with position address
 - INSTRUCTION: evaluate the instruction condition. If met → close_position. If not → HOLD, do nothing.
-- ⚡ exit alerts: close immediately, no exceptions
 
-Execute the required actions. Do NOT re-evaluate CLOSE/CLAIM — rules already applied. Just execute.
+Execute the required actions. Do NOT re-evaluate CLAIM — rules already applied. Just execute.
 After executing, write a brief one-line result per position.
       `, config.llm.maxSteps, [], "MANAGER", config.llm.managementModel, 2048, {
         onToolStart: async ({ name }) => { await liveMessage?.toolStart(name); },
@@ -512,7 +542,7 @@ After executing, write a brief one-line result per position.
       });
 
       mgmtReport += `\n\n${content}`;
-    } else {
+    } else if (directCloses.length === 0) {
       log("cron", "Management: all positions STAY — skipping LLM");
       await liveMessage?.note("No tool actions needed.");
     }

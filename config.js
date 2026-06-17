@@ -227,6 +227,9 @@ export const config = {
     redeployCooldownMin:             u.redeployCooldownMin             ?? 60,
     // Direct-close in PnL poller when stop-loss triggers (skip LLM round-trip).
     directStopLossClose:             u.directStopLossClose             ?? true,
+    // Direct-close in PnL poller when trailing-TP / take-profit confirms (skip the
+    // cooldown-gated management round-trip so profit exits fire within seconds).
+    directProfitClose:               u.directProfitClose               ?? true,
     // Volatility-crash detector: reject re-deploys to a token whose volatility has collapsed
     // since a recent deploy (calm-before-rug pattern). Disabled when set to null/0.
     volatilityCrashEnabled:          u.volatilityCrashEnabled          ?? true,

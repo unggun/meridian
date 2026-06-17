@@ -19,3 +19,23 @@ export function partitionManagementActions(entries) {
   }
   return { directCloses, llmActions };
 }
+
+/**
+ * Whether a PnL-poller exit action should be closed directly in-process — a fast
+ * path that skips the management-cycle round-trip (which is cooldown-gated up to
+ * managementIntervalMin). These are all fully deterministic exits.
+ *
+ *  - STOP_LOSS              — gated by `directStopLossClose` (default on); fast to
+ *                             minimise rug-bleed.
+ *  - TRAILING_TP / TAKE_PROFIT — gated by `directProfitClose` (default on); fast so
+ *                             a confirmed profit exit isn't given back waiting for
+ *                             the next management cycle.
+ *
+ * The two gates are independent. Any other action (OOR, low yield, etc.) is NOT a
+ * poller fast-path — it routes through the management cycle as before.
+ */
+export function shouldDirectCloseExit(action, config = {}) {
+  if (action === "STOP_LOSS") return config.directStopLossClose !== false;
+  if (action === "TRAILING_TP" || action === "TAKE_PROFIT") return config.directProfitClose !== false;
+  return false;
+}

@@ -11,7 +11,7 @@
 // to the model. STAY is never executed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { partitionManagementActions } from "../management-routing.js";
+import { partitionManagementActions, shouldDirectCloseExit } from "../management-routing.js";
 
 test("CLOSE actions route to direct execution, not the LLM", () => {
   const entries = [
@@ -52,4 +52,40 @@ test("STAY is never executed nor routed", () => {
   const { directCloses, llmActions } = partitionManagementActions(entries);
   assert.deepEqual(directCloses.map(e => e.position), ["B"]);
   assert.equal(llmActions.length, 0);
+});
+
+// ── PnL-poller fast-path eligibility ──────────────────────────────────
+// The poller closes deterministic exits directly (no management-cycle round-trip).
+// Stop-loss already did; trailing TP / take profit now do too so they fire within
+// seconds instead of waiting up to managementIntervalMin.
+
+test("stop loss closes directly from poller by default", () => {
+  assert.equal(shouldDirectCloseExit("STOP_LOSS", {}), true);
+});
+
+test("stop loss respects directStopLossClose=false", () => {
+  assert.equal(shouldDirectCloseExit("STOP_LOSS", { directStopLossClose: false }), false);
+});
+
+test("trailing TP and take profit close directly by default", () => {
+  assert.equal(shouldDirectCloseExit("TRAILING_TP", {}), true);
+  assert.equal(shouldDirectCloseExit("TAKE_PROFIT", {}), true);
+});
+
+test("trailing TP / take profit respect directProfitClose=false", () => {
+  assert.equal(shouldDirectCloseExit("TRAILING_TP", { directProfitClose: false }), false);
+  assert.equal(shouldDirectCloseExit("TAKE_PROFIT", { directProfitClose: false }), false);
+});
+
+test("directStopLossClose and directProfitClose are independent gates", () => {
+  // disabling stop-loss direct close must not disable profit direct closes
+  assert.equal(shouldDirectCloseExit("TRAILING_TP", { directStopLossClose: false }), true);
+  // and vice versa
+  assert.equal(shouldDirectCloseExit("STOP_LOSS", { directProfitClose: false }), true);
+});
+
+test("non-fast-path exits (OOR / unknown / missing) do not close directly", () => {
+  assert.equal(shouldDirectCloseExit("OOR", {}), false);
+  assert.equal(shouldDirectCloseExit("LOW_YIELD", {}), false);
+  assert.equal(shouldDirectCloseExit(undefined, {}), false);
 });

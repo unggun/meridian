@@ -13,7 +13,7 @@ import { confirmIndicatorPreset, evaluateIntervalPreset, confirmSupertrendRollov
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
-import { partitionManagementActions } from "./management-routing.js";
+import { partitionManagementActions, shouldDirectCloseExit } from "./management-routing.js";
 import {
   startPolling,
   stopPolling,
@@ -142,6 +142,33 @@ function shouldUsePnlRecheck() {
   return !config.api.lpAgentRelayEnabled;
 }
 
+/**
+ * Close a position directly from the PnL poller (or a recheck timer) — no LLM, no
+ * management-cycle round-trip. Holds _managementBusy for the duration so the poller
+ * and screener don't overlap the close, and stamps _pollTriggeredAt. Returns true
+ * on success. Used for deterministic fast-path exits (stop loss, trailing TP, take
+ * profit); see shouldDirectCloseExit.
+ */
+async function directCloseFromPoll(p, reason) {
+  _managementBusy = true;
+  try {
+    log("state", `[PnL poll] Direct close: ${p.pair} — ${reason}`);
+    const result = await executeTool("close_position", {
+      position_address: p.position,
+      reason,
+    });
+    const ok = result?.success !== false && !result?.error && !result?.blocked;
+    if (!ok) log("cron_error", `[PnL poll] Direct close failed for ${p.pair}: ${result?.error || result?.reason || "unknown"}`);
+    _pollTriggeredAt = Date.now();
+    return ok;
+  } catch (e) {
+    log("cron_error", `[PnL poll] Direct close threw for ${p.pair}: ${e.message}`);
+    return false;
+  } finally {
+    _managementBusy = false;
+  }
+}
+
 function schedulePeakConfirmation(positionAddress) {
   if (!positionAddress || _peakConfirmTimers.has(positionAddress)) return;
 
@@ -174,8 +201,13 @@ function scheduleTrailingDropConfirmation(positionAddress) {
         TRAILING_DROP_CONFIRM_TOLERANCE_PCT,
       );
       if (resolved?.confirmed) {
-        log("state", `[Trailing recheck] Confirmed trailing exit for ${positionAddress} — triggering management`);
-        runManagementCycle({ silent: true }).catch((e) => log("cron_error", `Trailing recheck management failed: ${e.message}`));
+        if (position && shouldDirectCloseExit("TRAILING_TP", config.management)) {
+          log("state", `[Trailing recheck] Confirmed trailing exit for ${positionAddress} — closing directly`);
+          await directCloseFromPoll(position, `auto: ${resolved.reason || "Trailing TP"}`);
+        } else {
+          log("state", `[Trailing recheck] Confirmed trailing exit for ${positionAddress} — triggering management`);
+          runManagementCycle({ silent: true }).catch((e) => log("cron_error", `Trailing recheck management failed: ${e.message}`));
+        }
       }
     } catch (error) {
       log("state_warn", `Trailing drop confirmation failed for ${positionAddress}: ${error.message}`);
@@ -199,8 +231,13 @@ function scheduleTakeProfitConfirmation(positionAddress) {
         config.management.takeProfitPct,
       );
       if (resolved?.confirmed) {
-        log("state", `[TP recheck] Confirmed take-profit for ${positionAddress} — triggering management`);
-        runManagementCycle({ silent: true }).catch((e) => log("cron_error", `TP recheck management failed: ${e.message}`));
+        if (position && shouldDirectCloseExit("TAKE_PROFIT", config.management)) {
+          log("state", `[TP recheck] Confirmed take-profit for ${positionAddress} — closing directly`);
+          await directCloseFromPoll(position, `auto: ${resolved.reason || "Take profit"}`);
+        } else {
+          log("state", `[TP recheck] Confirmed take-profit for ${positionAddress} — triggering management`);
+          runManagementCycle({ silent: true }).catch((e) => log("cron_error", `TP recheck management failed: ${e.message}`));
+        }
       }
     } catch (error) {
       log("state_warn", `Take-profit confirmation failed for ${positionAddress}: ${error.message}`);
@@ -1061,21 +1098,12 @@ Summarize the current portfolio health, total fees earned, and performance of al
             }
             continue;
           }
-          // Fast path for stop-loss: skip LLM round-trip, close directly to minimise rug-bleed.
-          if (exit.action === "STOP_LOSS" && config.management.directStopLossClose !== false) {
-            _managementBusy = true;
-            try {
-              log("state", `[PnL poll] Direct stop-loss close: ${p.pair} — ${exit.reason}`);
-              await executeTool("close_position", {
-                position_address: p.position,
-                reason: `auto: ${exit.reason}`,
-              });
-              _pollTriggeredAt = Date.now();
-            } catch (e) {
-              log("cron_error", `Direct stop-loss close failed for ${p.pair}: ${e.message}`);
-            } finally {
-              _managementBusy = false;
-            }
+          // Fast path: close deterministic exits (stop loss, trailing TP, take
+          // profit) directly — skip the LLM and the cooldown-gated management
+          // round-trip so profit exits aren't given back waiting for the next
+          // cycle (and stop-loss still cuts rug-bleed fast).
+          if (shouldDirectCloseExit(exit.action, config.management)) {
+            await directCloseFromPoll(p, `auto: ${exit.reason}`);
             break;
           }
           const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
@@ -1093,19 +1121,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
         if (closeRule) {
           // Fast path for deterministic stop-loss (rule 1): close directly, no LLM.
           if (closeRule.rule === 1 && config.management.directStopLossClose !== false) {
-            _managementBusy = true;
-            try {
-              log("state", `[PnL poll] Direct stop-loss close: ${p.pair} — Rule 1: ${closeRule.reason}`);
-              await executeTool("close_position", {
-                position_address: p.position,
-                reason: `auto: ${closeRule.reason}`,
-              });
-              _pollTriggeredAt = Date.now();
-            } catch (e) {
-              log("cron_error", `Direct stop-loss close failed for ${p.pair}: ${e.message}`);
-            } finally {
-              _managementBusy = false;
-            }
+            await directCloseFromPoll(p, `auto: Rule 1: ${closeRule.reason}`);
             break;
           }
           const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;

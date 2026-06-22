@@ -7,6 +7,7 @@ import { agentLoop } from "./agent.js";
 import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
 import { getWalletBalances } from "./tools/wallet.js";
+import { reportFinalBalanceIfFlat } from "./wallet-report.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { formatGmgnCandidateForPrompt } from "./tools/gmgn.js";
 import { confirmIndicatorPreset, evaluateIntervalPreset, confirmSupertrendRolloverExit } from "./tools/chart-indicators.js";
@@ -28,7 +29,7 @@ import {
   createLiveMessage,
 } from "./telegram.js";
 import { generateBriefing } from "./briefing.js";
-import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, getTrackedPositions, setPositionInstruction, updatePnlAndCheckExits, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop, queuePendingTakeProfit, resolvePendingTakeProfit, confirmChartExitDebounce } from "./state.js";
+import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, getTrackedPositions, setPositionInstruction, updatePnlAndCheckExits, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop, queuePendingTakeProfit, resolvePendingTakeProfit, confirmChartExitDebounce, stopLossGateAllows } from "./state.js";
 import { getActiveStrategy } from "./strategy-library.js";
 import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
@@ -1229,7 +1230,8 @@ function getDeterministicCloseRule(position, managementConfig) {
     return false;
   })();
 
-  if (!pnlSuspect && position.pnl_pct != null && position.pnl_pct <= managementConfig.stopLossPct) {
+  if (!pnlSuspect && position.pnl_pct != null && position.pnl_pct <= managementConfig.stopLossPct
+      && stopLossGateAllows(managementConfig, { in_range: position.in_range, out_of_range_since: tracked?.out_of_range_since })) {
     return { action: "CLOSE", rule: 1, reason: "stop loss" };
   }
   // Rule 2 (take profit) moved into updatePnlAndCheckExits — it now uses a 15s
@@ -2003,6 +2005,7 @@ async function telegramHandler(msg) {
         const closeTxs = result.close_txs?.length ? result.close_txs : result.txs;
         const claimNote = result.claim_txs?.length ? `\nClaim txs: ${result.claim_txs.join(", ")}` : "";
         await sendMessage(`✅ Closed ${pos.pair}\nPnL: ${config.management.solMode ? "◎" : "$"}${result.pnl_usd ?? "?"} | close txs: ${closeTxs?.join(", ") || "n/a"}${claimNote}`);
+        await reportFinalBalanceIfFlat();
       } else {
         await sendMessage(`❌ Close failed: ${JSON.stringify(result)}`);
       }
@@ -2025,6 +2028,7 @@ async function telegramHandler(msg) {
         }
       }
       await sendMessage(`Close-all finished.\n\n${results.join("\n")}`).catch(() => {});
+      await reportFinalBalanceIfFlat();
     } catch (e) {
       await sendMessage(`Error: ${e.message}`).catch(() => {});
     }

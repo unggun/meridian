@@ -45,6 +45,7 @@ const TIMEFRAME_MINUTES = {
 };
 import { log, logAction } from "../logger.js";
 import { notifyDeploy, notifyClose, notifySwap } from "../telegram.js";
+import { reportFinalBalanceIfFlat } from "../wallet-report.js";
 
 const SENSITIVE_CONFIG_KEYS = new Set([
   "gmgnApiKey",
@@ -390,6 +391,7 @@ const toolMap = {
       volatilityCrashMaxCurrentVol: ["management", "volatilityCrashMaxCurrentVol"],
       minVolumeToRebalance: ["management", "minVolumeToRebalance"],
       stopLossPct: ["management", "stopLossPct"],
+      stopLossOnlyWhenOOR: ["management", "stopLossOnlyWhenOOR"],
       takeProfitPct: ["management", "takeProfitPct"],
       takeProfitFeePct: ["management", "takeProfitPct"],
       trailingTakeProfit: ["management", "trailingTakeProfit"],
@@ -752,6 +754,8 @@ export async function executeTool(name, args) {
             log("executor_warn", `Auto-swap after close threw: ${e.message}`);
           }
         }
+        // If this was the last open position, report the final wallet balance.
+        await reportFinalBalanceIfFlat();
       } else if (name === "claim_fees" && config.management.autoSwapAfterClaim && result.base_mint) {
         try {
           const balances = await getWalletBalances({});

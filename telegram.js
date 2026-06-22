@@ -505,7 +505,7 @@ export async function notifyClose({ pair, pnlUsd, pnlPct, reason, currency = "$"
   const sign = pnlUsd >= 0 ? "+" : "";
   await sendHTML(
     `🔒 <b>Closed</b> ${escapeHtml(pair)}\n` +
-    `PnL: ${sign}${currency}${(pnlUsd ?? 0).toFixed(2)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)` +
+    `PnL: ${sign}${currency}${(pnlUsd ?? 0).toFixed(4)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)` +
     (reason ? `\nReason: ${escapeHtml(reason)}` : "")
   );
 }

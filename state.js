@@ -482,6 +482,22 @@ export function getStateSummary() {
 }
 
 /**
+ * Whether the stop-loss is allowed to fire given the OOR gate.
+ *
+ * When `mgmtConfig.stopLossOnlyWhenOOR` is true, the stop-loss fires ONLY when the
+ * position is confirmed out-of-range — `in_range === false` OR a persisted
+ * `out_of_range_since`. Unknown range status (no `in_range`, no timestamp) counts
+ * as "not confirmed OOR" → blocked. When the flag is false/absent, always allowed
+ * (unchanged legacy behavior). Pure; shared by both SL trigger paths.
+ * @param {object} mgmtConfig
+ * @param {{ in_range?: boolean|null, out_of_range_since?: string|null }} rangeState
+ */
+export function stopLossGateAllows(mgmtConfig, rangeState = {}) {
+  if (!mgmtConfig?.stopLossOnlyWhenOOR) return true;
+  return rangeState.in_range === false || !!rangeState.out_of_range_since;
+}
+
+/**
  * Check all exit conditions for a position (trailing TP, stop loss, OOR, low yield).
  * Updates peak_pnl_pct, trailing_active, and OOR state.
  * @param {string} position_address
@@ -542,7 +558,9 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   if (changed) save(state);
 
   // ── Stop loss ──────────────────────────────────────────────────
-  if (!pnl_pct_suspicious && currentPnlPct != null && mgmtConfig.stopLossPct != null && currentPnlPct <= mgmtConfig.stopLossPct) {
+  // OOR state on `pos` was refreshed just above, so it reflects this tick.
+  if (!pnl_pct_suspicious && currentPnlPct != null && mgmtConfig.stopLossPct != null && currentPnlPct <= mgmtConfig.stopLossPct
+      && stopLossGateAllows(mgmtConfig, { in_range, out_of_range_since: pos.out_of_range_since })) {
     return {
       action: "STOP_LOSS",
       reason: `Stop loss: PnL ${currentPnlPct.toFixed(2)}% <= ${mgmtConfig.stopLossPct}%`,

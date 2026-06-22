@@ -200,8 +200,14 @@ export function recordPoolDeploy(poolAddress, deployData) {
   const lossThresholdPct = config.management.lossClusterPnlThresholdPct ?? -3;
   const windowDeploys = entry.deploys.slice(-lossWindow).filter((d) => d.pnl_pct != null);
   const lossesInWindow = windowDeploys.filter((d) => d.pnl_pct <= lossThresholdPct).length;
+  // Only arm on a losing close — the deploy just recorded must itself be the loss.
+  // Without this, a later WINNING close re-arms a fresh cooldown while an old loss still
+  // sits in the lookback window (e.g. trigger=1: a single -7.6% loss kept re-cooling the
+  // token on every subsequent profitable close until it rolled out of the last-N window).
+  const latestCloseIsLoss = deploy.pnl_pct != null && deploy.pnl_pct <= lossThresholdPct;
 
   if (
+    latestCloseIsLoss &&
     lossesInWindow >= lossTriggerCount &&
     !(entry.cooldown_until && new Date(entry.cooldown_until) > new Date())
   ) {

@@ -238,6 +238,7 @@ export const config = {
     volatilityCrashMaxCurrentVol:    u.volatilityCrashMaxCurrentVol    ?? 2,
     minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
     stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
+    stopLossOnlyWhenOOR:   u.stopLossOnlyWhenOOR   ?? false,
     takeProfitPct:         u.takeProfitPct         ?? u.takeProfitFeePct ?? 5,
     minFeePerTvl24h:       u.minFeePerTvl24h       ?? 7,
     minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? 60, // minutes before low yield can trigger close

@@ -115,6 +115,7 @@ export function trackPosition({
     confirmed_trailing_exit_until: null,
     trailing_active: false,
     pending_chart_exit_since: null,
+    deploy_cost_sol: null,
   };
   pushEvent(state, { action: "deploy", position, pool_name: pool_name || pool });
   save(state);
@@ -171,6 +172,20 @@ export function recordClaim(position_address, fees_usd) {
   pos.last_claim_at = new Date().toISOString();
   pos.total_fees_claimed_usd = (pos.total_fees_claimed_usd || 0) + (fees_usd || 0);
   pos.notes.push(`Claimed ~$${fees_usd?.toFixed(2) || "?"} fees at ${pos.last_claim_at}`);
+  save(state);
+}
+
+/**
+ * Record the net SOL the wallet spent to open this position
+ * (liquidity + rent + gas − refunds), measured by the executor as a wallet
+ * delta around the deploy. Used at close to compute realized PnL.
+ */
+export function recordDeployCost(position_address, sol) {
+  if (sol == null || !Number.isFinite(sol)) return;
+  const state = load();
+  const pos = state.positions[position_address];
+  if (!pos) return;
+  pos.deploy_cost_sol = sol;
   save(state);
 }
 

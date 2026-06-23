@@ -30,6 +30,7 @@ import { appendDecision } from "../decision-log.js";
 import { getAndClearStagedSignals } from "../signal-tracker.js";
 import { computePositions, fetchDlmmPnlForPool } from "./pnl.js";
 import { buildBlendedDistribution, txNeedsPositionSigner, blendSkipPreflight } from "./liquidity-blend.js";
+import { assertNoUnsafeSystemTransfer } from "./relay-guard.js";
 
 // ─── Lazy SDK loader ───────────────────────────────────────────
 // @meteora-ag/dlmm → @coral-xyz/anchor uses CJS directory imports
@@ -252,53 +253,8 @@ function getStaticAccountKeyStrings(tx) {
   return tx.compileMessage().accountKeys.map((key) => key.toString());
 }
 
-function getTransactionInstructions(tx) {
-  if (!(tx instanceof VersionedTransaction)) return tx.instructions;
-
-  const keys = tx.message.staticAccountKeys;
-  return tx.message.compiledInstructions
-    .map((ix) => {
-      const programId = keys[ix.programIdIndex];
-      if (!programId) return null;
-      const accounts = ix.accountKeyIndexes
-        .map((accountIndex) => keys[accountIndex])
-        .filter(Boolean);
-      return new TransactionInstruction({
-        programId,
-        keys: accounts.map((pubkey) => ({ pubkey, isSigner: false, isWritable: false })),
-        data: Buffer.from(ix.data),
-      });
-    })
-    .filter(Boolean);
-}
-
-function assertNoUnsafeSystemTransfer(tx, wallet, allowedDestinations = []) {
-  const owner = wallet.publicKey.toString();
-  const allowed = new Set(allowedDestinations.filter(Boolean).map(String));
-
-  for (const ix of getTransactionInstructions(tx)) {
-    if (!ix.programId.equals(SystemProgram.programId)) continue;
-
-    let type = null;
-    try {
-      type = SystemInstruction.decodeInstructionType(ix);
-    } catch {
-      continue;
-    }
-    if (type !== "Transfer" && type !== "TransferWithSeed") continue;
-
-    const decoded = type === "Transfer"
-      ? SystemInstruction.decodeTransfer(ix)
-      : SystemInstruction.decodeTransferWithSeed(ix);
-    const source = decoded.fromPubkey?.toString();
-    const destination = decoded.toPubkey?.toString();
-    if (source === owner && !allowed.has(destination)) {
-      throw new Error(
-        `Relay transaction contains direct SOL transfer from owner to ${destination?.slice(0, 8) || "unknown"}.`,
-      );
-    }
-  }
-}
+// getTransactionInstructions + assertNoUnsafeSystemTransfer live in tools/relay-guard.js
+// (leaf module, unit-tested) and are imported at the top of this file.
 
 function signSerializedTransactions(serializedTxs, wallet) {
   return (serializedTxs || [])
@@ -310,6 +266,7 @@ async function signAndSimulateRelayTransactions(serializedTxs, wallet, {
   label,
   allowedDebitMints = [],
   allowedSystemTransferDestinations = [],
+  allowOwnerSystemTransfers = false,
   maxSolLoss = 0.05,
   requiredStaticAccounts = [],
 } = {}) {
@@ -323,7 +280,7 @@ async function signAndSimulateRelayTransactions(serializedTxs, wallet, {
 
     const signedBase64 = signSerializedTransaction(serialized, wallet);
     const tx = deserializeSignedTransaction(signedBase64);
-    assertNoUnsafeSystemTransfer(tx, wallet, allowedSystemTransferDestinations);
+    assertNoUnsafeSystemTransfer(tx, wallet, allowedSystemTransferDestinations, { allowOwnerSystemTransfers });
     const staticKeys = getStaticAccountKeyStrings(tx);
     for (const account of requiredStaticAccounts.filter(Boolean)) {
       if (!staticKeys.includes(String(account))) {
@@ -1766,12 +1723,16 @@ export async function closePosition({ position_address, reason }) {
         const closeSigned = await signAndSimulateRelayTransactions(closeUnsigned, wallet, {
           label: "zap-out close",
           allowedDebitMints: relayAllowedDebitMints,
+          // Provider swap legs fund a transient router/WSOL account from the owner; defer to
+          // the net-lamport-loss sim (maxSolLoss) instead of the instruction-level transfer ban.
+          allowOwnerSystemTransfers: true,
           maxSolLoss: 0.05,
           requiredStaticAccounts: [wallet.publicKey.toString(), position_address],
         });
         const swapSigned = await signAndSimulateRelayTransactions(swapUnsigned, wallet, {
           label: "zap-out swap",
           allowedDebitMints: relayAllowedDebitMints,
+          allowOwnerSystemTransfers: true,
           maxSolLoss: 0.05,
           requiredStaticAccounts: [wallet.publicKey.toString()],
         });

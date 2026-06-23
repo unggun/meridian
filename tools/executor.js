@@ -13,7 +13,8 @@ import {
 import { getWalletBalances, swapToken } from "./wallet.js";
 import { studyTopLPers } from "./study.js";
 import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../lessons.js";
-import { setPositionInstruction } from "../state.js";
+import { setPositionInstruction, getTrackedPosition, recordDeployCost } from "../state.js";
+import { computeRealizedPnl } from "./realized-pnl.js";
 
 import { getPoolMemory, addPoolNote } from "../pool-memory.js";
 import { addStrategy, listStrategies, getStrategy, setActiveStrategy, removeStrategy } from "../strategy-library.js";
@@ -705,6 +706,16 @@ export async function executeTool(name, args) {
     }
   }
 
+  // Realized-PnL: snapshot wallet SOL before deploy/close to measure the delta.
+  let _walletBefore = null;
+  if ((name === "deploy_position" || name === "close_position") && process.env.DRY_RUN !== "true") {
+    try {
+      _walletBefore = (await getWalletBalances())?.sol ?? null;
+    } catch (e) {
+      log("executor_warn", `wallet snapshot before ${name} failed: ${e.message}`);
+    }
+  }
+
   // ─── Execute ──────────────────────────────
   try {
     const result = await fn(args);
@@ -724,8 +735,15 @@ export async function executeTool(name, args) {
         notifySwap({ inputSymbol: args.input_mint?.slice(0, 8), outputSymbol: args.output_mint === "So11111111111111111111111111111111111111112" || args.output_mint === "SOL" ? "SOL" : args.output_mint?.slice(0, 8), amountIn: result.amount_in, amountOut: result.amount_out, tx: result.tx }).catch((e) => log("notify_warn", `notifySwap failed: ${e.message}`));
       } else if (name === "deploy_position") {
         notifyDeploy({ pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8), amountSol: args.amount_y ?? args.amount_sol ?? 0, position: result.position, tx: result.txs?.[0] ?? result.tx, priceRange: result.price_range, rangeCoverage: result.range_coverage, binStep: result.bin_step, baseFee: result.base_fee, strategy: result.strategy, strategyMix: result.strategy_mix }).catch((e) => log("notify_warn", `notifyDeploy failed: ${e.message}`));
+        if (_walletBefore != null && result.position) {
+          try {
+            const walletAfter = (await getWalletBalances())?.sol ?? null;
+            if (walletAfter != null) recordDeployCost(result.position, _walletBefore - walletAfter);
+          } catch (e) {
+            log("executor_warn", `deploy-cost capture failed: ${e.message}`);
+          }
+        }
       } else if (name === "close_position") {
-        notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, reason: args.reason, currency: config.management.solMode ? "◎" : "$" }).catch((e) => log("notify_warn", `notifyClose failed: ${e.message}`));
         // Note low-yield closes in pool memory so screener avoids redeploying
         if (args.reason && args.reason.toLowerCase().includes("yield")) {
           const poolAddr = result.pool || args.pool_address;
@@ -754,6 +772,31 @@ export async function executeTool(name, args) {
             log("executor_warn", `Auto-swap after close threw: ${e.message}`);
           }
         }
+        // Realized PnL: wallet recovered across the close vs. recorded deploy cost.
+        let realizedSol = null, realizedPct = null;
+        if (_walletBefore != null) {
+          try {
+            const walletAfter = (await getWalletBalances())?.sol ?? null;
+            const tracked = getTrackedPosition(args.position_address);
+            const r = computeRealizedPnl({
+              recovered: walletAfter != null ? walletAfter - _walletBefore : null,
+              deployCostSol: tracked?.deploy_cost_sol ?? null,
+              amountSol: tracked?.amount_sol ?? null,
+            });
+            if (r) { realizedSol = r.realizedSol; realizedPct = r.realizedPct; }
+          } catch (e) {
+            log("executor_warn", `realized-pnl capture failed: ${e.message}`);
+          }
+        }
+        notifyClose({
+          pair: result.pool_name || args.position_address?.slice(0, 8),
+          pnlUsd: result.pnl_usd ?? 0,
+          pnlPct: result.pnl_pct ?? 0,
+          realizedSol,
+          realizedPct,
+          reason: args.reason,
+          currency: config.management.solMode ? "◎" : "$",
+        }).catch((e) => log("notify_warn", `notifyClose failed: ${e.message}`));
         // If this was the last open position, report the final wallet balance.
         await reportFinalBalanceIfFlat();
       } else if (name === "claim_fees" && config.management.autoSwapAfterClaim && result.base_mint) {

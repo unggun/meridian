@@ -500,14 +500,37 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
   );
 }
 
-export async function notifyClose({ pair, pnlUsd, pnlPct, reason, currency = "$" }) {
-  if (hasActiveLiveMessage()) return;
-  const sign = pnlUsd >= 0 ? "+" : "";
-  await sendHTML(
+export function formatCloseMessage({ pair, pnlUsd, pnlPct, realizedSol = null, realizedPct = null, reason, currency = "$" }) {
+  const sign = (v) => {
+    const val = v ?? 0;
+    return val >= 0 ? "+" : "-";
+  };
+  const formatValue = (v) => {
+    const val = v ?? 0;
+    const s = val >= 0 ? "+" : "-";
+    return `${s}${currency}${Math.abs(val).toFixed(4)}`;
+  };
+  const formatPercent = (v) => {
+    const val = v ?? 0;
+    const s = val >= 0 ? "+" : "-";
+    return `${s}${Math.abs(val).toFixed(2)}%`;
+  };
+  const markLabel = realizedSol != null ? "PnL (mark): " : "PnL: ";
+  let body =
     `🔒 <b>Closed</b> ${escapeHtml(pair)}\n` +
-    `PnL: ${sign}${currency}${(pnlUsd ?? 0).toFixed(4)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)` +
-    (reason ? `\nReason: ${escapeHtml(reason)}` : "")
-  );
+    `${markLabel}${formatValue(pnlUsd)} (${formatPercent(pnlPct)})`;
+  if (realizedSol != null) {
+    body +=
+      `\nPnL (realized): ${formatValue(realizedSol)}` +
+      (realizedPct != null ? ` (${formatPercent(realizedPct)})` : "");
+  }
+  if (reason) body += `\nReason: ${escapeHtml(reason)}`;
+  return body;
+}
+
+export async function notifyClose(opts) {
+  if (hasActiveLiveMessage()) return;
+  await sendHTML(formatCloseMessage(opts));
 }
 
 export async function notifySwap({ inputSymbol, outputSymbol, amountIn, amountOut, tx }) {

@@ -207,6 +207,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
   const latestCloseIsLoss = deploy.pnl_pct != null && deploy.pnl_pct <= lossThresholdPct;
 
   if (
+    lossTriggerCount > 0 &&
     latestCloseIsLoss &&
     lossesInWindow >= lossTriggerCount &&
     !(entry.cooldown_until && new Date(entry.cooldown_until) > new Date())

@@ -8,7 +8,7 @@ import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
 import { getWalletBalances } from "./tools/wallet.js";
 import { reportFinalBalanceIfFlat } from "./wallet-report.js";
-import { getTopCandidates } from "./tools/screening.js";
+import { getTopCandidates, degenScore } from "./tools/screening.js";
 import { formatGmgnCandidateForPrompt } from "./tools/gmgn.js";
 import { confirmIndicatorPreset, evaluateIntervalPreset, confirmSupertrendRolloverExit } from "./tools/chart-indicators.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
@@ -283,6 +283,7 @@ async function maybeRunMissedBriefing() {
 function stopCronJobs() {
   for (const task of _cronTasks) task.stop();
   if (_cronTasks._pnlPollInterval) clearInterval(_cronTasks._pnlPollInterval);
+  if (_cronTasks._opportunityPollInterval) clearInterval(_cronTasks._opportunityPollInterval);
   _cronTasks = [];
 }
 
@@ -1142,10 +1143,70 @@ Summarize the current portfolio health, total fees earned, and performance of al
     }
   }, pnlPollMs);
 
+  // Opportunity poller — catches strong pools between the (slow) screening cycles.
+  // Reuses the getTopCandidates pipeline (discovery + holder audit + filters + score);
+  // when the best candidate clears the Degen Score pre-gate it triggers the existing
+  // screening deploy decision (runScreeningCycle), which re-checks guards and forces the
+  // deploy LLM.
+  let opportunityPollInterval = null;
+  if (config.opportunity.enabled) {
+    const oppMs = Math.max(15, Number(config.opportunity.pollIntervalSec ?? 45)) * 1000;
+    const oppCooldownMs = 5 * 60 * 1000; // don't re-trigger the deploy LLM more than every 5m
+    let _opportunityPollBusy = false;
+    opportunityPollInterval = setInterval(async () => {
+      if (_screeningBusy || _managementBusy || _opportunityPollBusy) return;
+      if (Date.now() - _screeningLastTriggered < oppCooldownMs) return;
+      _opportunityPollBusy = true;
+      try {
+        const [positions, balance] = await Promise.all([
+          getMyPositions({ force: true, silent: true }).catch(() => null),
+          getWalletBalances().catch(() => null),
+        ]);
+        if (!positions || (positions.total_positions ?? 0) >= config.risk.maxPositions) return;
+        const minRequired = config.management.deployAmountSol + config.management.gasReserve;
+        if (process.env.DRY_RUN !== "true" && (!balance || balance.sol < minRequired)) return;
+
+        const top = await getTopCandidates({ limit: config.opportunity.limit }).catch(() => null);
+        const candidates = (top?.candidates || []).slice().sort((a, b) => degenScore(b, config.opportunity) - degenScore(a, config.opportunity));
+        if (!candidates.length) return;
+
+        const minScore = config.opportunity.minScore;
+        const bonus = Number(config.opportunity.smartWalletScoreBonus ?? 0);
+        const floor = minScore - bonus; // lowest degen that could qualify, only WITH a smart wallet
+
+        // A pool qualifies if degen >= minScore, OR it's borderline (floor..minScore) AND a
+        // tracked smart wallet sits on it (checkSmartWalletsOnPool, on-chain positions of our
+        // tracked KOL list). The smart-wallet lookup runs only for borderline pools to keep
+        // the 45s poll cheap.
+        let trigger = null;
+        for (const c of candidates) {
+          const s = degenScore(c, config.opportunity);
+          if (s < floor) break; // sorted desc — nothing below can qualify either
+          if (s >= minScore) { trigger = { c, s, smart: [] }; break; }
+          if (bonus <= 0) continue; // borderline but smart-wallet rescue disabled
+          const smart = (await checkSmartWalletsOnPool({ pool_address: c.pool }).catch(() => null))?.in_pool || [];
+          if (smart.length > 0) { trigger = { c, s, smart }; break; }
+        }
+        if (!trigger) return;
+
+        const smartTag = trigger.smart.length
+          ? ` + smart wallet [${trigger.smart.map((w) => w.name || w.address?.slice(0, 4)).join(", ")}] (bar lowered ${minScore}→${floor})`
+          : "";
+        log("cron", `[Opportunity] ${trigger.c.name} degen ${trigger.s.toFixed(1)} >= ${trigger.smart.length ? floor : minScore}${smartTag} — triggering screening deploy decision`);
+        runScreeningCycle({ silent: true }).catch((e) => log("cron_error", `Opportunity-triggered screening failed: ${e.message}`));
+      } catch (e) {
+        log("cron_error", `Opportunity poll failed: ${e.message}`);
+      } finally {
+        _opportunityPollBusy = false;
+      }
+    }, oppMs);
+  }
+
   _cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog];
-  // Store interval ref so stopCronJobs can clear it
+  // Store interval refs so stopCronJobs can clear them
   _cronTasks._pnlPollInterval = pnlPollInterval;
-  log("cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`);
+  _cronTasks._opportunityPollInterval = opportunityPollInterval;
+  log("cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m${config.opportunity.enabled ? `, opportunity poll every ${config.opportunity.pollIntervalSec}s` : ""}`);
 }
 
 // ═══════════════════════════════════════════

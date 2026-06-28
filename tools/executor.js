@@ -677,6 +677,45 @@ const PROTECTED_TOOLS = new Set([
   "self_update",
 ]);
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Auto-swap a base token back to SOL with retry. Skips dust (< $0.10), retries on
+ * Jupiter failure (config.management.autoSwapRetryAttempts / autoSwapRetryDelayMs), and
+ * treats success:false / a missing tx as a failure (fixes the silent no-route case).
+ * @param {string} baseMint
+ * @param {string} label - context for logs ("after close" / "after claim")
+ * @param {object} [opts] - { slippageBps } passed through to swapToken
+ * @returns {Promise<{swapped:boolean, result:object|null, token:object|null, lastErr:string|null}>}
+ */
+async function swapBaseToSolWithRetry(baseMint, label, opts = {}) {
+  const attempts = Math.max(1, Number(config.management.autoSwapRetryAttempts ?? 3));
+  const delayMs = Math.max(0, Number(config.management.autoSwapRetryDelayMs ?? 3000));
+  let lastErr = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const balances = await getWalletBalances({});
+      const token = balances.tokens?.find((t) => t.mint === baseMint);
+      if (!token || token.usd < 0.10) {
+        // Nothing left to swap (already sold or dust) — treat as done.
+        return { swapped: attempt > 1, result: null, token: null, lastErr: null };
+      }
+      const lbl = token.symbol || baseMint.slice(0, 8);
+      log("executor", `Auto-swapping ${label} ${lbl} ($${token.usd.toFixed(2)}) back to SOL (attempt ${attempt}/${attempts})`);
+      const swapResult = await swapToken({ input_mint: baseMint, output_mint: "SOL", amount: token.balance, ...opts });
+      const ok = swapResult && swapResult.success !== false && !swapResult.error && (swapResult.tx || swapResult.amount_out);
+      if (ok) return { swapped: true, result: swapResult, token, lastErr: null };
+      lastErr = swapResult?.error || swapResult?.reason || "swap returned no tx";
+    } catch (e) {
+      lastErr = e.message;
+    }
+    log("executor_warn", `Auto-swap ${label} attempt ${attempt}/${attempts} failed: ${lastErr}`);
+    if (attempt < attempts) await sleep(delayMs);
+  }
+  log("executor_warn", `Auto-swap ${label} failed after ${attempts} attempts — base token left unsold (${baseMint.slice(0, 8)})`);
+  return { swapped: false, result: null, token: null, lastErr };
+}
+
 /**
  * Execute a tool call with safety checks and logging.
  */
@@ -749,27 +788,19 @@ export async function executeTool(name, args) {
           const poolAddr = result.pool || args.pool_address;
           if (poolAddr) addPoolNote({ pool_address: poolAddr, note: `Closed: low yield (fee/TVL below threshold) at ${new Date().toISOString().slice(0,10)}` }).catch?.(() => {});
         }
-        // Auto-swap base token back to SOL unless user said to hold
+        // Auto-swap base token back to SOL unless user said to hold (retried, 5% slippage).
         if (!args.skip_swap && result.base_mint) {
-          try {
-            const balances = await getWalletBalances({});
-            const token = balances.tokens?.find(t => t.mint === result.base_mint);
-            if (token && token.usd >= 0.10) {
-              const label = token.symbol || result.base_mint.slice(0, 8);
-              log("executor", `Auto-swapping ${label} ($${token.usd.toFixed(2)}) back to SOL`);
-              const swapResult = await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: token.balance, slippageBps: 500 });
-              if (swapResult?.success) {
-                result.auto_swapped = true;
-                result.auto_swap_note = `Base token auto-swapped back to SOL (${label} → SOL). Do NOT call swap_token again.`;
-                if (swapResult.amount_out) result.sol_received = swapResult.amount_out;
-              } else {
-                result.auto_swap_failed = true;
-                result.auto_swap_note = `Auto-swap FAILED (${swapResult?.error || "unknown"}). ${token.balance} ${label} still in wallet — call swap_token manually with higher slippage.`;
-                log("executor_warn", `Auto-swap after close failed: ${swapResult?.error || "unknown"}`);
-              }
-            }
-          } catch (e) {
-            log("executor_warn", `Auto-swap after close threw: ${e.message}`);
+          const { swapped, result: swapResult, token, lastErr } =
+            await swapBaseToSolWithRetry(result.base_mint, "after close", { slippageBps: 500 });
+          if (swapped) {
+            result.auto_swapped = true;
+            result.auto_swap_note = `Base token auto-swapped back to SOL. Do NOT call swap_token again.`;
+            if (swapResult?.amount_out) result.sol_received = swapResult.amount_out;
+          } else if (lastErr) {
+            // Only a genuine swap failure (dust/already-sold returns swapped:false, lastErr:null).
+            const label = token?.symbol || result.base_mint.slice(0, 8);
+            result.auto_swap_failed = true;
+            result.auto_swap_note = `Auto-swap FAILED after retries (${lastErr}). ${label} still in wallet — call swap_token manually with higher slippage.`;
           }
         }
         // Realized PnL: wallet recovered across the close vs. recorded deploy cost.
@@ -800,20 +831,7 @@ export async function executeTool(name, args) {
         // If this was the last open position, report the final wallet balance.
         await reportFinalBalanceIfFlat();
       } else if (name === "claim_fees" && config.management.autoSwapAfterClaim && result.base_mint) {
-        try {
-          const balances = await getWalletBalances({});
-          const token = balances.tokens?.find(t => t.mint === result.base_mint);
-          if (token && token.usd >= 0.10) {
-            const label = token.symbol || result.base_mint.slice(0, 8);
-            log("executor", `Auto-swapping claimed ${label} ($${token.usd.toFixed(2)}) back to SOL`);
-            const swapResult = await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: token.balance });
-            if (!swapResult?.success) {
-              log("executor_warn", `Auto-swap after claim failed: ${swapResult?.error || "unknown"}`);
-            }
-          }
-        } catch (e) {
-          log("executor_warn", `Auto-swap after claim threw: ${e.message}`);
-        }
+        await swapBaseToSolWithRetry(result.base_mint, "after claim");
       }
     }
 

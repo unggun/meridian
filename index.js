@@ -14,7 +14,7 @@ import { confirmIndicatorPreset, evaluateIntervalPreset, confirmSupertrendRollov
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
-import { partitionManagementActions, shouldDirectCloseExit } from "./management-routing.js";
+import { partitionManagementActions, shouldDirectCloseExit, canDirectCloseNow } from "./management-routing.js";
 import {
   startPolling,
   stopPolling,
@@ -151,6 +151,19 @@ function shouldUsePnlRecheck() {
  * profit); see shouldDirectCloseExit.
  */
 async function directCloseFromPoll(p, reason) {
+  // Don't open a close window while another SOL-moving cycle is in flight. Realized
+  // PnL is measured as a global wallet delta (walletBefore/After in executor.js), so
+  // an overlapping management-cycle close or screener deploy would be double-counted
+  // into this position's realized PnL. This path is reached both from the poller
+  // (where the lock was already verified free) and from decoupled confirmation
+  // setTimeouts (trailing-drop / peak / TP) that do NOT re-check the lock — the
+  // latter overlapped a management Rule-3 close and made Hobbes+world both report
+  // ~+1.50◎ / +155% realized on 2026-06-29. The exit is sticky: the next poll
+  // re-detects it and closes cleanly once the lock frees.
+  if (!canDirectCloseNow({ managementBusy: _managementBusy, screeningBusy: _screeningBusy })) {
+    log("state", `[PnL poll] Deferring direct close of ${p.pair} — another cycle in flight (avoids realized-PnL contamination)`);
+    return false;
+  }
   _managementBusy = true;
   try {
     log("state", `[PnL poll] Direct close: ${p.pair} — ${reason}`);

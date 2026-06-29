@@ -39,3 +39,22 @@ export function shouldDirectCloseExit(action, config = {}) {
   if (action === "TRAILING_TP" || action === "TAKE_PROFIT") return config.directProfitClose !== false;
   return false;
 }
+
+/**
+ * Whether a poll/timer-driven direct close may open its close window right now.
+ *
+ * Realized PnL is measured as a GLOBAL wallet delta (walletAfter − walletBefore in
+ * executor.js): the implicit assumption is that nothing else moves SOL between the
+ * two snapshots. A direct close fired from a decoupled confirmation setTimeout
+ * (trailing-drop / peak / take-profit) does NOT re-check the management/screening
+ * mutex, so it can overlap an in-flight management-cycle close (or a screener
+ * deploy). When two close windows overlap, each measures BOTH positions' recovered
+ * SOL + auto-swaps and reports a near-identical, inflated realized PnL (Hobbes+world
+ * both showed ~+1.50◎ / +155% on 2026-06-29 while mark PnL was ~+1.5%).
+ *
+ * Defer the direct close while another SOL-moving cycle holds the lock. The exit is
+ * sticky — the PnL poller re-detects it and closes cleanly once the lock frees.
+ */
+export function canDirectCloseNow({ managementBusy = false, screeningBusy = false } = {}) {
+  return !managementBusy && !screeningBusy;
+}

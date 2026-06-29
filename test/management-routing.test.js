@@ -11,7 +11,7 @@
 // to the model. STAY is never executed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { partitionManagementActions, shouldDirectCloseExit } from "../management-routing.js";
+import { partitionManagementActions, shouldDirectCloseExit, canDirectCloseNow } from "../management-routing.js";
 
 test("CLOSE actions route to direct execution, not the LLM", () => {
   const entries = [
@@ -88,4 +88,28 @@ test("non-fast-path exits (OOR / unknown / missing) do not close directly", () =
   assert.equal(shouldDirectCloseExit("OOR", {}), false);
   assert.equal(shouldDirectCloseExit("LOW_YIELD", {}), false);
   assert.equal(shouldDirectCloseExit(undefined, {}), false);
+});
+
+// ── Direct-close concurrency guard ────────────────────────────────────
+// Realized PnL is a global wallet delta; overlapping close windows double-count
+// each other's recovered SOL. A timer-driven direct close (trailing-drop / peak /
+// TP confirmation setTimeout) bypasses the management mutex, so it must re-check
+// the lock before opening its window. Hobbes (trailing TP, poll path) + world
+// (Rule 3, management path) both reported ~+1.50◎ / +155% realized on 2026-06-29
+// when their close windows overlapped while mark PnL was ~+1.5%.
+
+test("direct close allowed when no other SOL-moving cycle is in flight", () => {
+  assert.equal(canDirectCloseNow({ managementBusy: false, screeningBusy: false }), true);
+  assert.equal(canDirectCloseNow({}), true);
+  assert.equal(canDirectCloseNow(), true);
+});
+
+test("direct close deferred while a management cycle holds the lock", () => {
+  // The Hobbes+world contamination case: a confirmation timer must NOT close while
+  // the management cycle is mid-close of another position.
+  assert.equal(canDirectCloseNow({ managementBusy: true, screeningBusy: false }), false);
+});
+
+test("direct close deferred while a screener deploy is in flight", () => {
+  assert.equal(canDirectCloseNow({ managementBusy: false, screeningBusy: true }), false);
 });

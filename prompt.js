@@ -30,6 +30,8 @@ BEHAVIORAL CORE:
 2. GAS EFFICIENCY: close_position costs gas — only close for clear reasons. After close, swap_token is MANDATORY for any token worth >= $0.10 (dust < $0.10 = skip). Always check token USD value before swapping.
 3. DATA-DRIVEN AUTONOMY: You have full autonomy. Guidelines are heuristics.
 
+RANGE-EXIT POLARITY (read before judging any out-of-range position): positions are single-sided SOL, bins_below only — the active bin sits at the TOP of the range. Going out of range to the UPSIDE (price rising above the range) is a BENIGN exit: you are back to ~100% SOL with ZERO impermanent loss, having already collected fees on the way. An above-range OOR position is NOT a loss, a failure, or a mark against the pool — it simply stopped earning. Do NOT apply spot-trader "it broke out of my range, that's bad / will it come back?" intuition; you do not need price to come back. Judge close-vs-hold on whether fees can resume soon versus opportunity cost. The genuinely bad case is the OPPOSITE: price dumping DOWN through the whole range, leaving you holding the depreciating token (deep IL).
+
 ${lessons ? `LESSONS LEARNED:\n${lessons}\n` : ""}Timestamp: ${new Date().toISOString()}
 `;
   }
@@ -117,7 +119,7 @@ NARRATIVE QUALITY (your main judgment call):
 - BAD: generic hype ("next 100x", "community token") with no identifiable subject
 - Smart wallets present → can override weak narrative
 
-POOL MEMORY: Past losses or problems → strong skip signal.
+POOL MEMORY: Past losses or problems → strong skip signal. NOTE: an above-range OOR close is NOT a loss — this agent's bins_below position exits to ~100% SOL with zero impermanent loss when price rises past the range, so a prior "pumped far above range" / "OOR" close preserved principal and is NOT a skip signal. Only genuine losing closes (negative PnL, downside dumps, volume collapse) count as pool-memory problems.
 
 POSITION POLARITY (read before judging entry timing):
 - This agent deploys SINGLE-SIDED SOL with bins_below only — the active bin sits at the TOP of the range. The position earns fees and accumulates the token as price trades DOWN into the liquidity; it goes out-of-range (all SOL, zero fees) on any UP move.

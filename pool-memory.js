@@ -43,12 +43,22 @@ function isOorCloseReason(reason) {
   return text === "oor" || text.includes("out of range") || text.includes("oor");
 }
 
-function isAdjustedWinRateExcludedReason(reason) {
+/**
+ * Above-range OOR = the only way a single-sided-SOL / bins-below position leaves its
+ * range: price rises ABOVE it, so it exits to ~100% SOL with zero impermanent loss.
+ * A benign, principal-preserving exit — NOT a loss or a strategy failure.
+ */
+export function isAboveRangeOorReason(reason) {
   const text = String(reason || "").trim().toLowerCase();
-  return text.includes("out of range") ||
-    text.includes("pumped far above range") ||
-    text === "oor" ||
+  if (!text) return false;
+  return text.includes("pumped far above range") ||
+    text.includes("out of range") ||
     text.includes("oor");
+}
+
+// Win-rate exclusion uses the same set: benign above-range OOR exits are not losses.
+function isAdjustedWinRateExcludedReason(reason) {
+  return isAboveRangeOorReason(reason);
 }
 
 function isFeeGeneratingDeploy(deploy) {
@@ -360,6 +370,55 @@ export function getPoolMemory({ pool_address }) {
     };
   }
 
+  return buildPoolMemorySummary(entry, pool_address);
+}
+
+const OOR_BENIGN_NOTE =
+  "Above-range OOR: this single-sided-SOL / bins-below position exited to ~100% SOL " +
+  "with zero impermanent loss. Principal preserved — NOT a loss or a strategy failure.";
+
+/**
+ * Shape a pool-memory entry into the get_pool_memory tool payload the screener LLM reads.
+ *
+ * Scoped fix for above-range OOR only: the RAW win_rate counts every benign above-range
+ * OOR exit as a non-win, which made pools that only ever pumped past their range look like
+ * ~0% win-rate failures. Here we lead with the adjusted win rate (OOR excluded), demote the
+ * raw rate, annotate benign OOR history entries, and report win_rate as null (not 0%) when
+ * there is no non-OOR deploy to judge. Genuine non-OOR losses are untouched.
+ */
+export function buildPoolMemorySummary(entry, pool_address) {
+  const deploys = entry.deploys || [];
+
+  const history = deploys.slice(-10).map((d) =>
+    isAboveRangeOorReason(d.close_reason)
+      ? { ...d, oor_benign: true, oor_note: OOR_BENIGN_NOTE }
+      : d
+  );
+
+  const withPnl = deploys.filter((d) => d.pnl_pct != null);
+  const aboveRangeOorCount = withPnl.filter((d) => isAboveRangeOorReason(d.close_reason)).length;
+  const adjustedCount = entry.adjusted_win_rate_sample_count ?? 0;
+  const hasAdjustedBasis = adjustedCount > 0;
+
+  let winRateNote;
+  if (!hasAdjustedBasis && aboveRangeOorCount > 0) {
+    winRateNote =
+      `No win/loss basis yet: all ${aboveRangeOorCount} prior deploy(s) closed as benign ` +
+      `above-range OOR (exited to ~100% SOL, zero IL — principal preserved, NOT losses). ` +
+      `This is NOT a losing or a failed pool.`;
+  } else if (aboveRangeOorCount > 0) {
+    winRateNote =
+      `Win rate excludes ${aboveRangeOorCount} benign above-range OOR exit(s) ` +
+      `(~100% SOL, zero IL — not losses).`;
+  }
+
+  const lastDeploy = deploys[deploys.length - 1];
+  const lastOutcomeNote =
+    lastDeploy && isAboveRangeOorReason(lastDeploy.close_reason)
+      ? "Last close was a benign above-range OOR exit (~100% SOL, zero IL) — a 'loss' " +
+        "outcome here reflects only minor fees/slippage, not impermanent loss or a failed thesis."
+      : undefined;
+
   return {
     pool_address,
     known: true,
@@ -367,17 +426,24 @@ export function getPoolMemory({ pool_address }) {
     base_mint: entry.base_mint,
     total_deploys: entry.total_deploys,
     avg_pnl_pct: entry.avg_pnl_pct,
-    win_rate: entry.win_rate,
-    adjusted_win_rate: entry.adjusted_win_rate ?? 0,
-    adjusted_win_rate_sample_count: entry.adjusted_win_rate_sample_count ?? 0,
+    // Primary win rate: excludes benign above-range OOR exits (see win_rate_note).
+    // null when there is no non-OOR deploy to judge — do NOT read that as 0% wins.
+    win_rate: hasAdjustedBasis ? (entry.adjusted_win_rate ?? 0) : null,
+    win_rate_sample_count: adjustedCount,
+    win_rate_note: winRateNote,
+    // Raw rate that counts benign above-range OOR exits as non-wins — misleading for this
+    // strategy. Kept only for transparency; judge the pool on win_rate above.
+    raw_win_rate_incl_oor: entry.win_rate,
+    above_range_oor_count: aboveRangeOorCount,
     last_deployed_at: entry.last_deployed_at,
     last_outcome: entry.last_outcome,
+    last_outcome_note: lastOutcomeNote,
     cooldown_until: entry.cooldown_until || null,
     cooldown_reason: entry.cooldown_reason || null,
     base_mint_cooldown_until: entry.base_mint_cooldown_until || null,
     base_mint_cooldown_reason: entry.base_mint_cooldown_reason || null,
     notes: entry.notes,
-    history: entry.deploys.slice(-10), // last 10 deploys
+    history: history, // last 10 deploys, above-range OOR closes annotated benign
   };
 }
 

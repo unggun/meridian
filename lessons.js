@@ -213,10 +213,25 @@ export async function recordPerformance(perf) {
 }
 
 /**
+ * True when a close reason indicates an ABOVE-range OOR exit (price rose past the
+ * top of a bins-below range). For this agent's single-sided-SOL / bins-below
+ * strategy that is the ONLY out-of-range direction, and it returns ~100% SOL with
+ * zero impermanent loss — a neutral-to-good event, NOT a failure. Used to keep the
+ * lesson engine from minting polarity-wrong "avoid / widen the range" lessons.
+ */
+export function isAboveRangeOorReason(reason) {
+  const text = String(reason || "").trim().toLowerCase();
+  if (!text) return false;
+  return text.includes("pumped far above range") ||
+    text.includes("out of range") ||
+    text.includes("oor");
+}
+
+/**
  * Derive a lesson from a closed position's performance.
  * Only generates a lesson if the outcome was clearly good or bad.
  */
-function derivLesson(perf) {
+export function derivLesson(perf) {
   const tags = [];
   const feeYieldPct = perf.initial_value_usd > 0
     ? ((perf.fees_earned_usd || 0) / perf.initial_value_usd) * 100
@@ -253,7 +268,7 @@ function derivLesson(perf) {
   let rule = "";
 
   if (outcome === "good" || outcome === "bad") {
-    if (perf.range_efficiency < 30 && outcome === "bad") {
+    if (perf.range_efficiency < 30 && outcome === "bad" && !isAboveRangeOorReason(perf.close_reason)) {
       rule = `AVOID: ${perf.pool_name}-type pools (volatility=${perf.volatility}, bin_step=${perf.bin_step}) with strategy="${perf.strategy}" — went OOR ${100 - perf.range_efficiency}% of the time. Consider wider bin_range or bid_ask strategy.`;
       tags.push("oor", perf.strategy, `volatility_${Math.round(perf.volatility)}`);
     } else if (perf.range_efficiency > 80 && outcome === "good") {
